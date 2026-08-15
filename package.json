@@ -37,7 +37,9 @@
     "db:local:ltv": "wrangler d1 execute flexfit-studio --local --file=./server/db/migrations/0004_lifetime_base.sql",
     "db:remote:ltv": "wrangler d1 execute flexfit-studio --remote --file=./server/db/migrations/0004_lifetime_base.sql",
     "test:routes": "node scripts/test-routes.mjs",
-    "test:front-door": "node scripts/test-front-door.mjs"
+    "test:front-door": "node scripts/test-front-door.mjs",
+    "test:signin-roles": "node scripts/test-signin-roles.mjs",
+    "test:fixes": "node scripts/test-fixes-ui.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

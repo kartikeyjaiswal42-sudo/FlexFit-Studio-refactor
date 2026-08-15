@@ -36,6 +36,11 @@ interface SharedProps {
  * The week. Seven columns to scale, one scroll region, capacity pressure
  * readable at a glance from the bar in every block.
  */
+/** Width one column needs so `lanes` tiled blocks each stay readable. */
+const PX_PER_LANE = 46
+const MIN_DAY_WIDTH = 116
+const GUTTER_WIDTH = 44
+
 export function WeekGrid({
   weekStart,
   occurrences,
@@ -50,60 +55,107 @@ export function WeekGrid({
 }: SharedProps & { weekStart: Date }) {
   const days = React.useMemo(() => weekDates(weekStart), [weekStart])
 
+  /**
+   * Lay every day out once, then size the grid to the busiest of them.
+   *
+   * Concurrent classes tile rather than overlap (see DayColumn), so on a morning
+   * with three classes at 07:30 each block gets a third of the column. At seven
+   * columns in a laptop-width pane that is around 45px — enough for the start
+   * time and a truncated name, and not enough for anything else. Rather than
+   * shrink below that, the grid takes a minimum width and scrolls sideways: a
+   * class you have to scroll to reach is still better than one hidden behind
+   * another.
+   */
+  const layouts = React.useMemo(
+    () =>
+      days.map((day) => {
+        const iso = isoDate(day)
+        const dayOccurrences = occurrencesOnDay(occurrences, iso)
+        return { iso, dayOccurrences, layout: layoutDay(dayOccurrences) }
+      }),
+    [days, occurrences],
+  )
+
+  /**
+   * Each day is sized for ITS OWN busiest hour, not the week's.
+   *
+   * Sizing all seven to the worst day made a single four-class morning widen
+   * every column, which pushed Sunday off the edge of a laptop screen to buy
+   * room a day with two classes never needed. Per-day minimums usually let the
+   * whole week fit; when they genuinely cannot, the scroll is carrying real
+   * classes rather than empty space.
+   */
+  const dayMinimums = React.useMemo(
+    () =>
+      layouts.map((d) => {
+        const lanes = Math.max(1, ...Array.from(d.layout.values(), (v) => v.lanes))
+        return Math.max(MIN_DAY_WIDTH, lanes * PX_PER_LANE)
+      }),
+    [layouts],
+  )
+
+  const minWidth = GUTTER_WIDTH + dayMinimums.reduce((sum, w) => sum + w, 0)
+  const columns = `${GUTTER_WIDTH}px ${dayMinimums.map((w) => `minmax(${w}px, 1fr)`).join(' ')}`
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-card">
-      {/* day heads */}
-      <div className="grid shrink-0 grid-cols-[44px_repeat(7,minmax(0,1fr))] border-b border-border bg-subtle">
-        <div aria-hidden />
-        {days.map((day) => {
-          const iso = isoDate(day)
-          const dayOccurrences = occurrencesOnDay(occurrences, iso)
-          const today = iso === TODAY_ISO
-          return (
-            <div
-              key={iso}
-              className={cn(
-                'flex min-w-0 flex-col gap-0.5 border-l border-border px-2 py-1.5',
-                today && 'bg-primary-soft',
-              )}
-            >
-              <span className="flex items-baseline gap-1">
-                <span
-                  className={cn(
-                    'text-micro font-medium tracking-wide uppercase',
-                    today ? 'text-accent-foreground' : 'text-muted-foreground',
-                  )}
-                >
-                  {WEEKDAY_LABELS[day.getUTCDay()]}
-                </span>
-                <span
-                  className={cn(
-                    'text-sm font-semibold tnum',
-                    today ? 'text-accent-foreground' : 'text-foreground',
-                  )}
-                >
-                  {day.getUTCDate()}
-                </span>
-              </span>
-              <DayHeadCount occurrences={dayOccurrences} rosterFor={rosterFor} />
-            </div>
-          )
-        })}
-      </div>
-
-      {/* scroll body */}
+      {/*
+        One scroller for the heads and the body together. They used to be two,
+        which was fine while the grid could never be wider than its pane — now
+        that it can be, a split scroller would slide the columns out from under
+        their own dates. The head row stays put vertically by being sticky.
+      */}
       <div className="min-h-0 flex-1 overflow-auto scrollbar-thin">
-        <div className="grid grid-cols-[44px_repeat(7,minmax(0,1fr))]">
-          <TimeGutter className="border-r border-border" />
-          {days.map((day) => {
-            const iso = isoDate(day)
-            const dayOccurrences = occurrencesOnDay(occurrences, iso)
-            return (
+        <div style={{ minWidth }}>
+          {/* day heads */}
+          <div
+            className="sticky top-0 z-30 grid border-b border-border bg-subtle"
+            style={{ gridTemplateColumns: columns }}
+          >
+            <div aria-hidden />
+            {layouts.map(({ iso, dayOccurrences }, i) => {
+              const day = days[i]
+              const today = iso === TODAY_ISO
+              return (
+                <div
+                  key={iso}
+                  className={cn(
+                    'flex min-w-0 flex-col gap-0.5 border-l border-border px-2 py-1.5',
+                    today && 'bg-primary-soft',
+                  )}
+                >
+                  <span className="flex items-baseline gap-1">
+                    <span
+                      className={cn(
+                        'text-micro font-medium tracking-wide uppercase',
+                        today ? 'text-accent-foreground' : 'text-muted-foreground',
+                      )}
+                    >
+                      {WEEKDAY_LABELS[day.getUTCDay()]}
+                    </span>
+                    <span
+                      className={cn(
+                        'text-sm font-semibold tnum',
+                        today ? 'text-accent-foreground' : 'text-foreground',
+                      )}
+                    >
+                      {day.getUTCDate()}
+                    </span>
+                  </span>
+                  <DayHeadCount occurrences={dayOccurrences} rosterFor={rosterFor} />
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="grid" style={{ gridTemplateColumns: columns }}>
+            <TimeGutter className="border-r border-border" />
+            {layouts.map(({ iso, dayOccurrences, layout }) => (
               <DayColumn
                 key={iso}
                 iso={iso}
                 occurrences={dayOccurrences}
-                layout={layoutDay(dayOccurrences)}
+                layout={layout}
                 rosterFor={rosterFor}
                 waitlistFor={waitlistFor}
                 selectedKey={selectedKey}
@@ -115,8 +167,8 @@ export function WeekGrid({
                 nowMinutes={iso === TODAY_ISO ? NOW_MINUTES : null}
                 className={iso === TODAY_ISO ? 'bg-primary-soft/25' : undefined}
               />
-            )
-          })}
+            ))}
+          </div>
         </div>
       </div>
     </div>

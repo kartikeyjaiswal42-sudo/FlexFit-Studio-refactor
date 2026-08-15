@@ -9,6 +9,8 @@ import { RequireScreen } from '@/components/shell/app-shell'
 import { Card, CardHeader } from '@/components/ui/card'
 import { FilterTrigger } from '@/components/ui/filter-chip'
 import { StatusChip } from '@/components/ui/status-chip'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { num } from '@/lib/format'
 import { useListTraversal, TraversalHint } from '@/components/command/use-list-traversal'
@@ -21,7 +23,27 @@ import { REPORTS, REPORT_CATEGORIES, type ReportCategory, type ReportDef } from 
 export function ReportsLibrary() {
   const router = useRouter()
   const [category, setCategory] = React.useState<'all' | ReportCategory>('all')
-  const visible = category === 'all' ? REPORTS : REPORTS.filter((r) => r.category === category)
+  const [query, setQuery] = React.useState('')
+
+  /**
+   * Search covers the QUESTION as well as the title, because that is how people
+   * look for a report: "why are people leaving", "which classes are empty".
+   * Matching titles alone means knowing what the report is called before you can
+   * find it, which is the wrong way round.
+   */
+  const visible = React.useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return REPORTS.filter((r) => {
+      if (category !== 'all' && r.category !== category) return false
+      if (!q) return true
+      return (
+        r.title.toLowerCase().includes(q) ||
+        r.question.toLowerCase().includes(q) ||
+        r.category.toLowerCase().includes(q) ||
+        r.window.toLowerCase().includes(q)
+      )
+    })
+  }, [category, query])
 
   const open = React.useCallback((report: ReportDef) => router.push(`/reports/${report.slug}`), [router])
   const { rowProps } = useListTraversal({ items: visible, onOpen: open })
@@ -33,7 +55,11 @@ export function ReportsLibrary() {
         crumbs={[{ label: 'FlexFit Studio', href: '/dashboard' }, { label: 'Reports' }]}
         meta={
           <>
-            <span className="tnum">{num(REPORTS.length)} reports</span>
+            <span className="tnum">
+              {visible.length === REPORTS.length
+                ? `${num(REPORTS.length)} reports`
+                : `${num(visible.length)} of ${num(REPORTS.length)} reports`}
+            </span>
             <span aria-hidden>·</span>
             <span>Computed live from the current dataset</span>
             <span aria-hidden>·</span>
@@ -42,21 +68,48 @@ export function ReportsLibrary() {
         }
         sticky={false}
       >
-        <div className="flex flex-wrap items-center gap-1.5">
-          <FilterTrigger label="All" active={category === 'all'} onClick={() => setCategory('all')} />
-          {REPORT_CATEGORIES.map((c) => (
-            <FilterTrigger
-              key={c}
-              label={c}
-              value={String(REPORTS.filter((r) => r.category === c).length)}
-              active={category === c}
-              onClick={() => setCategory(category === c ? 'all' : c)}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <FilterTrigger label="All" active={category === 'all'} onClick={() => setCategory('all')} />
+            {REPORT_CATEGORIES.map((c) => (
+              <FilterTrigger
+                key={c}
+                label={c}
+                value={String(REPORTS.filter((r) => r.category === c).length)}
+                active={category === c}
+                onClick={() => setCategory(category === c ? 'all' : c)}
+              />
+            ))}
+          </div>
+          <div className="w-full max-w-64">
+            <Input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.currentTarget.value)}
+              placeholder="Search reports and questions"
+              aria-label="Search reports"
+              className="h-7"
             />
-          ))}
+          </div>
         </div>
       </PageHeader>
 
       <PageBody>
+        {visible.length === 0 ? (
+          <EmptyState
+            icon={FileBarChart}
+            title={`No report matches “${query.trim()}”`}
+            description="Search covers each report's title, the question it answers, its category and the window it covers."
+            action={{
+              label: 'Show every report',
+              onClick: () => {
+                setQuery('')
+                setCategory('all')
+              },
+            }}
+          />
+        ) : null}
+
         {REPORT_CATEGORIES.filter((c) => category === 'all' || c === category).map((cat) => {
           const rows = visible.filter((r) => r.category === cat)
           if (rows.length === 0) return null

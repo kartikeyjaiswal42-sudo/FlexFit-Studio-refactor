@@ -58,28 +58,32 @@ async function api(path, body) {
   return json.result.data
 }
 
+const ROLE_IDS = { Owner: 'owner', Trainer: 'trainer', 'Front desk': 'front_desk', Member: 'member' }
+
 /**
- * Switch role through the real top-bar menu.
+ * Become a different role.
  *
- * The trigger is a plain button reading "Role <current>", and the options are
- * buttons reading "Trainer — Priya Raghunathan". Retried because a click can
- * land before React has hydrated the popover, which leaves aria-expanded false
- * and no menu — visible, enabled, and completely inert.
+ * There is no longer a role SWITCHER in the top bar — it was removed because it
+ * let a member read the owner's navigation off a dropdown and walk into it. The
+ * role now comes from signing in, which records it in localStorage under
+ * `flexfit_role` and is read back by AppProvider on mount.
+ *
+ * So this writes the same key the sign-in screen writes and reloads, which is
+ * the real mechanism rather than a test-only back door. It then confirms the
+ * shell agrees, because trusting the write is how you get a test that passes
+ * against a broken handoff.
  */
 async function setRole(page, label) {
-  const trigger = page.locator('button', { hasText: /^Role/ }).first()
-  for (let attempt = 0; attempt < 12; attempt++) {
-    await trigger.click({ timeout: 5000 }).catch(() => {})
-    const option = page.locator('button', { hasText: new RegExp(`^${label}\\s+—`) }).first()
-    if (await option.count()) {
-      await option.click()
-      // Confirm the switch actually took, rather than trusting the click.
-      for (let i = 0; i < 20; i++) {
-        if (new RegExp(label, 'i').test(await trigger.innerText().catch(() => ''))) return true
-        await page.waitForTimeout(200)
-      }
-    }
-    await page.waitForTimeout(300)
+  await page.evaluate(
+    ([key, value]) => window.localStorage.setItem(key, value),
+    ['flexfit_role', ROLE_IDS[label]],
+  )
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('h1', { timeout: 20000 })
+  const trigger = page.locator('button[aria-label^="Signed in as"]').first()
+  for (let i = 0; i < 25; i++) {
+    if (new RegExp(label, 'i').test(await trigger.innerText().catch(() => ''))) return true
+    await page.waitForTimeout(200)
   }
   return false
 }

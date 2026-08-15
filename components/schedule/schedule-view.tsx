@@ -563,9 +563,17 @@ export function ScheduleScreen() {
             </p>
           </div>
 
-          {/* desktop detail rail */}
-          <aside className="hidden min-h-0 w-[360px] shrink-0 overflow-hidden rounded-md border border-border bg-card lg:flex lg:flex-col xl:w-[400px]">
-            {selected ? (
+          {/*
+            Desktop detail rail — only while a class is selected.
+
+            It used to hold a third of the width open for a "pick a class"
+            placeholder. That was affordable when concurrent classes overlapped
+            each other; now that they tile, the grid needs every pixel it can
+            get, and giving it back is the difference between seeing the whole
+            week and scrolling to find Friday.
+          */}
+          {selected ? (
+            <aside className="hidden min-h-0 w-[360px] shrink-0 flex-col overflow-hidden rounded-md border border-border bg-card lg:flex xl:w-[400px]">
               <ClassDetail
                 occurrence={selected}
                 roster={session.rosterFor(selected)}
@@ -584,18 +592,8 @@ export function ScheduleScreen() {
                 onPromote={(memberId) => session.promote(selected, memberId)}
                 onDropWaitlist={(memberId) => session.dropFromWaitlist(selected, memberId)}
               />
-            ) : (
-              <div className="flex h-full items-center justify-center p-6">
-                <div className="max-w-xs text-center">
-                  <p className="text-sm font-medium text-foreground">Pick a class</p>
-                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                    Select any block in the grid to see its roster, waitlist order and cancellation
-                    deadline, and to book or move someone.
-                  </p>
-                </div>
-              </div>
-            )}
-          </aside>
+            </aside>
+          ) : null}
         </div>
 
         {/* session audit strip */}

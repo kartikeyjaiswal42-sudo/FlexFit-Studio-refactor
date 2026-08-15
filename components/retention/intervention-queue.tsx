@@ -8,6 +8,7 @@ import { Card, CardHeader, CardBody, CardFooter } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
 import { EmptyState } from '@/components/ui/empty-state'
+import { Input } from '@/components/ui/input'
 import { RiskScore, StatusChip } from '@/components/ui/status-chip'
 import { ViewToggle } from '@/components/ui/tabs'
 import {
@@ -57,6 +58,7 @@ export function InterventionQueue({ className }: { className?: string }) {
   const { mutate, connection, busy } = useStudio()
   const version = useDataVersion()
   const [filter, setFilter] = React.useState<Filter>('all')
+  const [query, setQuery] = React.useState('')
   const [assigning, setAssigning] = React.useState<InterventionItem | null>(null)
   const [snoozing, setSnoozing] = React.useState<InterventionItem | null>(null)
 
@@ -74,17 +76,25 @@ export function InterventionQueue({ className }: { className?: string }) {
 
   const isLive = (item: InterventionItem) => resolved(item).status === 'open'
 
-  const active = React.useMemo(
-    () =>
-      interventionQueue.filter((item) => {
-        const s = resolved(item)
-        if (s.status !== 'open') return false
-        if (filter === 'mine') return s.assigneeId === CURRENT_STAFF_ID
-        if (filter === 'unassigned') return s.assigneeId === null
-        return true
-      }),
-    [filter, resolved],
-  )
+  const active = React.useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return interventionQueue.filter((item) => {
+      const s = resolved(item)
+      if (s.status !== 'open') return false
+      if (filter === 'mine' && s.assigneeId !== CURRENT_STAFF_ID) return false
+      if (filter === 'unassigned' && s.assigneeId !== null) return false
+      if (!q) return true
+      // Searching the owner's name too: "what is Marco still holding?" is the
+      // question this queue gets asked most after "where is this member".
+      const owner = s.assigneeId ? staffById.get(s.assigneeId)?.name ?? '' : ''
+      return (
+        item.member.name.toLowerCase().includes(q) ||
+        item.member.email.toLowerCase().includes(q) ||
+        PLAYS[item.play].label.toLowerCase().includes(q) ||
+        owner.toLowerCase().includes(q)
+      )
+    })
+  }, [filter, query, resolved])
 
   const openCount = interventionQueue.filter(isLive).length
   const snoozedCount = interventionQueue.filter((i) => resolved(i).status === 'snoozed').length
@@ -173,15 +183,27 @@ export function InterventionQueue({ className }: { className?: string }) {
         title="Intervention queue"
         description={'Ordered by risk \u00d7 monthly value. Work top-down.'}
         actions={
-          <ViewToggle
-            value={filter}
-            onChange={(v) => setFilter(v as Filter)}
-            items={[
-              { id: 'all', label: `All ${openCount}` },
-              { id: 'mine', label: `Mine ${mineCount}` },
-              { id: 'unassigned', label: `Open ${unassignedCount}` },
-            ]}
-          />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="w-full max-w-56 sm:w-56">
+              <Input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.currentTarget.value)}
+                placeholder="Search member, play or owner"
+                aria-label="Search the intervention queue"
+                className="h-7"
+              />
+            </div>
+            <ViewToggle
+              value={filter}
+              onChange={(v) => setFilter(v as Filter)}
+              items={[
+                { id: 'all', label: `All ${openCount}` },
+                { id: 'mine', label: `Mine ${mineCount}` },
+                { id: 'unassigned', label: `Open ${unassignedCount}` },
+              ]}
+            />
+          </div>
         }
       />
 
@@ -189,17 +211,22 @@ export function InterventionQueue({ className }: { className?: string }) {
         <CardBody>
           <EmptyState
             title={
-              filter === 'mine'
-                ? 'Nothing assigned to you'
-                : filter === 'unassigned'
-                  ? 'Every item is assigned'
-                  : 'Queue is clear'
+              query.trim()
+                ? `Nobody in the queue matches “${query.trim()}”`
+                : filter === 'mine'
+                  ? 'Nothing assigned to you'
+                  : filter === 'unassigned'
+                    ? 'Every item is assigned'
+                    : 'Queue is clear'
             }
             description={
-              filter === 'all'
-                ? 'No member above 45 is waiting on contact. Snoozed items return automatically.'
-                : 'Switch to All to see the rest of the queue.'
+              query.trim()
+                ? 'Search covers the member, their email, the play and whoever owns it.'
+                : filter === 'all'
+                  ? 'No member above 45 is waiting on contact. Snoozed items return automatically.'
+                  : 'Switch to All to see the rest of the queue.'
             }
+            action={query.trim() ? { label: 'Clear the search', onClick: () => setQuery('') } : undefined}
           />
         </CardBody>
       ) : (

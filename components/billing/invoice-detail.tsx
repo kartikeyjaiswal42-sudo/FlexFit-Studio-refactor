@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { Printer, RefreshCw, Send } from 'lucide-react'
+import { Mail, Printer, RefreshCw, Send } from 'lucide-react'
 import { PageHeader, PageBody } from '@/components/shell/page-header'
 import { RequireScreen } from '@/components/shell/app-shell'
 import { Card, CardBody, CardHeader, CardFooter, DataPoint } from '@/components/ui/card'
@@ -11,6 +11,7 @@ import { ConfirmDialog, ConsequenceNotice } from '@/components/ui/modal'
 import { PaymentStatus, StatusChip } from '@/components/ui/status-chip'
 import { Table, TableWrap, Tbody, Td, Th, Thead, Tr } from '@/components/ui/table'
 import { Checkbox } from '@/components/ui/input'
+import { ComposeEmailDialog } from '@/components/comms/compose-email-dialog'
 import { api } from '@/lib/api/client'
 import { useDataVersion, useStudio } from '@/lib/store/studio-store'
 import { clock, fullDate, money, shortDate } from '@/lib/format'
@@ -24,10 +25,16 @@ import { DUNNING_LADDER, paymentsForInvoice, type Invoice } from './billing-data
  * recovery action states what the member will experience before you send it.
  */
 export function InvoiceDetail({ invoice }: { invoice: Invoice }) {
-  const { mutate, busy } = useStudio()
+  const { mutate, busy, connection } = useStudio()
   const version = useDataVersion()
   const [refundOpen, setRefundOpen] = React.useState(false)
+  const [emailOpen, setEmailOpen] = React.useState(false)
   const [alsoEmail, setAlsoEmail] = React.useState(false)
+  const member = React.useMemo(
+    () => getMember(invoice.memberId),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [invoice.memberId, version],
+  )
   const rows = React.useMemo(() => paymentsForInvoice(invoice), [invoice, version])
   const unsettled = invoice.status === 'failed' || invoice.status === 'pending'
   const step = DUNNING_LADDER.find((s) => invoice.overdueDays >= s.onDay)
@@ -118,6 +125,26 @@ export function InvoiceDetail({ invoice }: { invoice: Invoice }) {
             <Button variant="secondary" size="sm" onClick={() => window.print()}>
               <Printer />
               Print
+            </Button>
+            {/* Sending the invoice is the commonest thing anyone wants to do
+                from this screen and there was no way to do it — Print was the
+                only way an invoice left the building. Disabled rather than
+                hidden when it cannot work, with the reason on the tooltip. */}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!member || connection !== 'live'}
+              title={
+                !member
+                  ? 'This invoice has no member record to send to.'
+                  : connection !== 'live'
+                    ? 'No connection to the server, so nothing can be sent.'
+                    : `Send ${invoice.id} to ${member.email}`
+              }
+              onClick={() => setEmailOpen(true)}
+            >
+              <Mail />
+              Email invoice
             </Button>
             {invoice.status === 'paid' && refundable ? (
               <Button variant="danger" size="sm" disabled={busy} onClick={() => setRefundOpen(true)}>
@@ -245,6 +272,84 @@ export function InvoiceDetail({ invoice }: { invoice: Invoice }) {
           </div>
         </div>
       </PageBody>
+
+      {member ? (
+        <ComposeEmailDialog
+          open={emailOpen}
+          onClose={() => setEmailOpen(false)}
+          to={member.email}
+          toName={member.name}
+          title={`Email ${invoice.id}`}
+          send={({ subject, body }) =>
+            api.comms.emailMember.mutate({ memberId: member.id, subject, body })
+          }
+          /* The invoice's own state decides which template opens first: a paid
+             invoice wants a receipt, an unpaid one wants asking for. Offering
+             "your payment has been received" against a failed card is how a
+             billing screen loses an operator's trust. */
+          templates={
+            invoice.status === 'paid'
+              ? [
+                  {
+                    label: 'Receipt',
+                    subject: `Receipt for ${invoice.id} — ${money(invoice.amount)}`,
+                    body: [
+                      `Hi ${member.firstName},`,
+                      '',
+                      `Thanks — we have received ${money(invoice.amount)} for ${invoice.planName}.`,
+                      '',
+                      `Invoice: ${invoice.id}`,
+                      `Issued: ${fullDate(invoice.issuedDate)}`,
+                      `Paid by: ${invoice.method.toUpperCase()}`,
+                      `Net ${money(invoice.netAmount)} + GST ${money(invoice.taxAmount)} = ${money(invoice.amount)}`,
+                      '',
+                      'Keep this for your records. Reply to this email if anything looks wrong.',
+                      '',
+                      'FlexFit Studio',
+                    ].join('\n'),
+                  },
+                ]
+              : [
+                  {
+                    label: invoice.overdueDays > 0 ? 'Overdue reminder' : 'Payment request',
+                    subject:
+                      invoice.overdueDays > 0
+                        ? `${invoice.id} is ${invoice.overdueDays} days overdue`
+                        : `${invoice.id} — ${money(invoice.amount)} due ${fullDate(invoice.dueDate)}`,
+                    body: [
+                      `Hi ${member.firstName},`,
+                      '',
+                      invoice.overdueDays > 0
+                        ? `${invoice.id} for ${invoice.planName} is ${invoice.overdueDays} days past its due date of ${fullDate(invoice.dueDate)}.`
+                        : `${invoice.id} for ${invoice.planName} is due on ${fullDate(invoice.dueDate)}.`,
+                      '',
+                      `Amount: ${money(invoice.amount)} (net ${money(invoice.netAmount)} + GST ${money(invoice.taxAmount)})`,
+                      `Method on file: ${invoice.method.toUpperCase()}`,
+                      '',
+                      invoice.overdueDays >= 18
+                        ? 'Access is paused while this is outstanding — it comes straight back once the payment goes through. Reply here if the card needs changing.'
+                        : 'We will retry the saved card. Reply here if you would rather pay another way, or if the card needs changing.',
+                      '',
+                      'FlexFit Studio',
+                    ].join('\n'),
+                  },
+                  {
+                    label: 'Card needs updating',
+                    subject: `Your card on file was declined — ${invoice.id}`,
+                    body: [
+                      `Hi ${member.firstName},`,
+                      '',
+                      `The ${invoice.method.toUpperCase()} we have on file was declined for ${money(invoice.amount)} (${invoice.planName}).`,
+                      '',
+                      'Nothing has changed about your membership. Drop by the desk or reply to this email and we will take it another way.',
+                      '',
+                      'FlexFit Studio',
+                    ].join('\n'),
+                  },
+                ]
+          }
+        />
+      ) : null}
 
       <ConfirmDialog
         open={refundOpen}

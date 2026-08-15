@@ -133,15 +133,25 @@ export function DayColumn({
       {occurrences.map((occ) => {
         const lanes = layout.get(occ.key)?.lanes ?? 1
         const lane = layout.get(occ.key)?.lane ?? 0
-        // Two concurrent classes split the column cleanly. Three or more would
-        // each land under ~50px — narrower than the start time — so past two we
-        // cascade instead: every block keeps a readable body, later lanes sit on
-        // top, and the slivers on the left still show their start time. Hover or
-        // selection lifts a block to the front.
-        const crowded = lanes > 2
-        const step = crowded ? 100 / (lanes + 1) : 100 / lanes
+        /*
+         * Concurrent classes tile the column — they never sit on top of each
+         * other. An earlier version cascaded overlapping blocks once there were
+         * three or more, so that each kept a readable width; what that actually
+         * produced was three classes covering one another, with only a sliver of
+         * the first two showing. The timetable is meant to be readable at a
+         * glance and half of every busy morning was hidden underneath the last
+         * class of the group.
+         *
+         * Even tiling makes the blocks narrow instead, so the WEEK grid holds a
+         * minimum column width for the busiest day and scrolls sideways rather
+         * than crushing them (see WeekGrid), and a block that lands narrow drops
+         * to time-and-name only. Nothing is ever covered.
+         */
+        const step = 100 / lanes
         const left = lane * step
-        const width = crowded ? 100 - left : step
+        const width = step
+        /** Narrow enough that the capacity bar and trainer line stop fitting. */
+        const tight = !expanded && lanes >= 3
         const roster = rosterFor(occ)
         const waitlist = waitlistFor(occ)
         const pressure = pressureFor(roster.length, occ.gymClass.capacity)
@@ -175,6 +185,9 @@ export function DayColumn({
               onDragEnd={onDragEnd}
               onClick={() => onSelect(occ)}
               aria-pressed={selected}
+              /* Whatever the block is too narrow to print is still one hover
+                 away, and the detail panel carries all of it on click. */
+              title={`${slotClock(occ.start)} · ${occ.gymClass.name} · ${occ.trainerName} · ${roster.length}/${occ.gymClass.capacity} booked`}
               className={cn(
                 'group flex h-full w-full flex-col overflow-hidden rounded-sm border px-1.5 py-1 text-left transition-colors duration-150 ease-[var(--ease-ui)]',
                 'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring',
@@ -187,19 +200,24 @@ export function DayColumn({
                 occ.state !== 'past' && 'cursor-grab active:cursor-grabbing',
               )}
             >
-              <span className="flex min-w-0 items-center gap-1">
+              <span className={cn('flex min-w-0 gap-1', tight ? 'flex-col' : 'items-center')}>
                 <span className="shrink-0 text-micro font-semibold text-foreground tnum">
-                  {slotClock(occ.start)}
+                  {/* The am/pm is dropped when the block is narrow: the hour
+                      gutter down the left already says which half of the day
+                      this is, and those three characters are the difference
+                      between a legible start time and a clipped one. */}
+                  {tight ? slotClock(occ.start).replace(/(am|pm)$/, '') : slotClock(occ.start)}
                 </span>
                 <span
                   className={cn(
-                    'min-w-0 flex-1 truncate text-micro',
+                    'min-w-0 truncate text-micro',
+                    tight ? 'w-full' : 'flex-1',
                     height > 34 ? 'text-foreground' : 'text-muted-foreground',
                   )}
                 >
                   {occ.gymClass.name}
                 </span>
-                {occ.state !== 'past' ? (
+                {occ.state !== 'past' && !tight ? (
                   <GripVertical
                     aria-hidden
                     className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
@@ -210,14 +228,16 @@ export function DayColumn({
               {/* Each row only appears once the block is tall enough to hold it
                   plus the rows below it. A 45-minute class clears the old 44px
                   gate but cannot fit time + trainer + capacity, so the trainer
-                  line was rendering half-clipped. */}
-              {height > 58 ? (
+                  line was rendering half-clipped. A tiled block in a crowded
+                  hour is too NARROW for these as well — the capacity bar becomes
+                  a few pixels of colour and the trainer name a single letter. */}
+              {height > 58 && !tight ? (
                 <span className="mt-0.5 truncate text-micro text-muted-foreground">
                   {expanded ? `${occ.trainerName} · ${occ.gymClass.type}` : occ.trainerName}
                 </span>
               ) : null}
 
-              {height > 34 ? (
+              {height > 34 && !tight ? (
                 <span className="mt-auto flex items-center gap-1.5">
                   <CapacityBar
                     filled={roster.length}

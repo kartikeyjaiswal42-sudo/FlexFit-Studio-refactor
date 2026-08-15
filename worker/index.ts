@@ -20,13 +20,29 @@ const API_PREFIX = '/api/trpc'
 
 /**
  * Detail routes whose ids are enumerated at BUILD time by generateStaticParams.
- * A record created after the build — a new lead, a new member — has no exported
- * HTML file, so the asset lookup misses and the request lands here. These pages
- * fetch their own data client-side, which means any one of the exported shells
- * renders the right thing once the id in the URL is read. Serving a sibling
- * shell keeps the URL intact instead of 404ing on a record that genuinely exists.
+ * A record created after the build — a new member, an invoice raised by taking a
+ * payment — has no exported HTML file, so the asset lookup misses and the
+ * request lands here. Serving a shell keeps the URL intact instead of 404ing on
+ * a record that genuinely exists.
+ *
+ * WHICH shell matters. Falling back to the section's own index served the
+ * members LIST for `/members/<new id>`, so adding a member bounced you back to
+ * the directory with the URL still claiming you were on their profile — the
+ * profile, their billing tab and their invoices were simply unreachable. The
+ * two sections where records are created during a session therefore get a
+ * purpose-built shell that reads the id back out of the URL; longest prefix
+ * wins so `/billing/invoices/` is matched before `/billing/`.
  */
-const CLIENT_ROUTED_PREFIXES = ['/members/', '/trainers/', '/corporate/', '/reports/', '/billing/invoices/']
+const CLIENT_ROUTED_PREFIXES: { prefix: string; shell: string }[] = [
+  { prefix: '/members/', shell: '/members/profile' },
+  { prefix: '/billing/invoices/', shell: '/billing/invoices/detail' },
+  // No id-reading shell yet: these sections have no in-app "create" button, so
+  // an unknown id here is a mistyped link rather than a new record. The index
+  // is a better answer than a 404.
+  { prefix: '/trainers/', shell: '/trainers' },
+  { prefix: '/corporate/', shell: '/corporate' },
+  { prefix: '/reports/', shell: '/reports' },
+]
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -50,9 +66,11 @@ export default {
 
     // Not an API call: hand it back to the asset server, which will have already
     // failed to match it. Fall back to the section's shell, then to 404.html.
-    const prefix = CLIENT_ROUTED_PREFIXES.find((p) => url.pathname.startsWith(p))
-    if (prefix) {
-      const shell = await env.ASSETS.fetch(new Request(new URL(prefix.slice(0, -1), url), request))
+    const match = CLIENT_ROUTED_PREFIXES.filter((p) => url.pathname.startsWith(p.prefix)).sort(
+      (a, b) => b.prefix.length - a.prefix.length,
+    )[0]
+    if (match) {
+      const shell = await env.ASSETS.fetch(new Request(new URL(match.shell, url), request))
       if (shell.status === 200) {
         // 200, not the shell's own status: the record may well exist, and the
         // page is about to fetch it. A hard 404 here would be a guess.

@@ -135,6 +135,22 @@ function RosterRow({
 
       {open ? (
         <div className="border-t border-border bg-subtle px-4 py-3">
+          {/* The names on the collapsed row are inside its toggle button, so
+              they cannot be links — nesting an anchor in a button is invalid and
+              the anchor stops being reachable. The clickable versions live here
+              instead: the trainer, and every member below. */}
+          <p className="mb-2.5 text-micro text-muted-foreground">
+            Led by{' '}
+            <Link
+              href={`/trainers/${c.trainerId}`}
+              className="font-medium text-primary underline-offset-2 hover:underline"
+            >
+              {trainerName(c.trainerId)}
+            </Link>
+            {' · '}
+            {c.durationMin} min · {c.roster.length}/{c.capacity} booked
+          </p>
+
           {c.waitlist.length > 0 ? (
             <p className="mb-2.5 rounded-sm border border-info-border bg-info-soft px-2 py-1.5 text-micro text-info">
               {`Full · ${c.waitlist.length} on the waitlist. If someone no-shows by ${clock(classStart(c.startTime))}, offer the spot to position 1.`}

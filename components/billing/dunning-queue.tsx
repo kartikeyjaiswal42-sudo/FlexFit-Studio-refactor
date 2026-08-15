@@ -2,12 +2,13 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { CheckCircle2, PhoneCall, RefreshCw } from 'lucide-react'
+import { CheckCircle2, Mail, PhoneCall, RefreshCw } from 'lucide-react'
 import { PageHeader, PageBody } from '@/components/shell/page-header'
 import { RequireScreen } from '@/components/shell/app-shell'
 import { Card, CardBody, CardHeader, KpiTile } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/modal'
+import { Input } from '@/components/ui/input'
 import { RiskScore, StatusChip } from '@/components/ui/status-chip'
 import { EmptyState } from '@/components/ui/empty-state'
 import {
@@ -22,9 +23,11 @@ import {
   Thead,
   Tr,
 } from '@/components/ui/table'
+import { ComposeEmailDialog } from '@/components/comms/compose-email-dialog'
 import { api } from '@/lib/api/client'
 import { useDataVersion, useStudio } from '@/lib/store/studio-store'
 import { stateOf } from '@/lib/data/work-items'
+import { getMember } from '@/lib/data/members'
 import { paymentById } from '@/lib/data/payments'
 import { compactMoney, money, num, shortDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -37,11 +40,13 @@ import { DUNNING_LADDER, dunningQueue, invoices, type DunningItem } from './bill
  * can spend their calls on the invoices that matter.
  */
 export function DunningQueue() {
-  const { mutate, busy } = useStudio()
+  const { mutate, busy, connection } = useStudio()
   const version = useDataVersion()
   const all = React.useMemo(() => dunningQueue(), [version])
   const [pauseTarget, setPauseTarget] = React.useState<DunningItem | null>(null)
+  const [emailTarget, setEmailTarget] = React.useState<DunningItem | null>(null)
   const [rung, setRung] = React.useState<string>('all')
+  const [query, setQuery] = React.useState('')
 
   // A row leaves the queue because somebody dealt with it, which is a stored
   // fact — not because this component forgot about it. `work_items` holds it,
@@ -50,7 +55,22 @@ export function DunningQueue() {
     () => all.filter((i) => stateOf(`dun-${i.invoice.id}`).status === 'open'),
     [all, version],
   )
-  const rows = rung === 'all' ? open : open.filter((i) => i.step.id === rung)
+  /**
+   * Rung filter first, then the search box. Somebody chasing a specific member
+   * knows their name, not which rung of the ladder they landed on — so the
+   * search deliberately spans the whole open queue when no rung is selected.
+   */
+  const rows = React.useMemo(() => {
+    const byRung = rung === 'all' ? open : open.filter((i) => i.step.id === rung)
+    const q = query.trim().toLowerCase()
+    if (!q) return byRung
+    return byRung.filter(
+      (i) =>
+        i.invoice.memberName.toLowerCase().includes(q) ||
+        i.invoice.id.toLowerCase().includes(q) ||
+        i.invoice.planName.toLowerCase().includes(q),
+    )
+  }, [open, rung, query])
   const atStake = open.reduce((s, i) => s + i.invoice.amount, 0)
   const recoverable = open.reduce((s, i) => s + i.monthlyValue, 0)
 
@@ -131,7 +151,19 @@ export function DunningQueue() {
         }
         sticky={false}
       >
-        <BillingTabs counts={{ '/billing': invoices.length, '/billing/dunning': open.length }} />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <BillingTabs counts={{ '/billing': invoices.length, '/billing/dunning': open.length }} />
+          <div className="w-full max-w-64">
+            <Input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.currentTarget.value)}
+              placeholder="Search member, invoice or plan"
+              aria-label="Search the dunning queue"
+              className="h-7"
+            />
+          </div>
+        </div>
       </PageHeader>
 
       <PageBody>
@@ -206,13 +238,27 @@ export function DunningQueue() {
           {rows.length === 0 ? (
             <div className="p-4">
               <EmptyState
-                title={open.length === 0 ? 'Nothing in recovery' : 'No invoices on this rung'}
+                title={
+                  open.length === 0
+                    ? 'Nothing in recovery'
+                    : query.trim()
+                      ? `Nothing in recovery matches “${query.trim()}”`
+                      : 'No invoices on this rung'
+                }
                 description={
                   open.length === 0
                     ? 'Every failed invoice this cycle has been settled or written off.'
-                    : 'Pick another rung, or show the whole queue.'
+                    : query.trim()
+                      ? 'Search covers the member name, the invoice number and the plan.'
+                      : 'Pick another rung, or show the whole queue.'
                 }
-                action={{ label: 'Show all rungs', onClick: () => setRung('all') }}
+                action={{
+                  label: query.trim() ? 'Clear the search' : 'Show all rungs',
+                  onClick: () => {
+                    setQuery('')
+                    setRung('all')
+                  },
+                }}
               />
             </div>
           ) : (
@@ -304,6 +350,20 @@ export function DunningQueue() {
                             <PhoneCall />
                             Called
                           </Button>
+                          {/* Chasing an overdue invoice by email was the one rung
+                              of this ladder with no button behind it — you could
+                              log a call you had made, but not send the message
+                              the ladder actually asks for. */}
+                          <Button
+                            variant="secondary"
+                            size="xs"
+                            disabled={connection !== 'live' || !getMember(item.invoice.memberId)}
+                            title={`Email ${item.invoice.memberName} about ${item.invoice.id}`}
+                            onClick={() => setEmailTarget(item)}
+                          >
+                            <Mail />
+                            Email
+                          </Button>
                           <Button
                             variant={item.paused ? 'danger' : 'ghost'}
                             size="xs"
@@ -321,6 +381,42 @@ export function DunningQueue() {
           )}
         </Card>
       </PageBody>
+
+      {emailTarget && getMember(emailTarget.invoice.memberId) ? (
+        <ComposeEmailDialog
+          open
+          onClose={() => setEmailTarget(null)}
+          to={getMember(emailTarget.invoice.memberId)!.email}
+          toName={emailTarget.invoice.memberName}
+          title={`Email about ${emailTarget.invoice.id}`}
+          send={({ subject, body }) =>
+            api.comms.emailMember.mutate({
+              memberId: emailTarget.invoice.memberId,
+              subject,
+              body,
+            })
+          }
+          templates={[
+            {
+              label: emailTarget.step.label,
+              subject: `${emailTarget.invoice.id} — ${money(emailTarget.invoice.amount)} outstanding`,
+              body: [
+                `Hi ${getMember(emailTarget.invoice.memberId)!.firstName},`,
+                '',
+                `${emailTarget.invoice.id} for ${emailTarget.invoice.planName} is ${emailTarget.invoice.overdueDays} days past due — ${money(emailTarget.invoice.amount)} on the ${emailTarget.invoice.method.toUpperCase()} we have on file.`,
+                '',
+                emailTarget.paused
+                  ? 'Check-in is paused until it clears. Your membership itself is intact and access comes straight back the moment the payment goes through.'
+                  : 'Nothing has changed about your membership. We will keep retrying the saved card.',
+                '',
+                'If the card needs updating, reply here or drop by the desk and we will sort it in a minute.',
+                '',
+                'FlexFit Studio',
+              ].join('\n'),
+            },
+          ]}
+        />
+      ) : null}
 
       <ConfirmDialog
         open={pauseTarget !== null}

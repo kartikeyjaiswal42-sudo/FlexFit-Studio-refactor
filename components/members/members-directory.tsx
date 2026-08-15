@@ -28,6 +28,12 @@ import {
   type SortDirection,
   type SortKey,
 } from './member-query'
+import {
+  deleteCustomView,
+  readCustomViews,
+  saveCustomView,
+  type CustomViewDef,
+} from './custom-views'
 
 /**
  * Member directory. 380 rows, filterable, sortable, bulk-selectable.
@@ -48,6 +54,13 @@ export function MembersDirectory() {
   const [selected, setSelected] = React.useState<Set<string>>(new Set())
   const [activeView, setActiveView] = React.useState<string | null>(viewParam)
   const [addOpen, setAddOpen] = React.useState(false)
+  /**
+   * Views this person saved themselves. Read after mount rather than in the
+   * initial state: the page is prerendered with none, and a first client render
+   * that disagreed with the HTML is a hydration mismatch.
+   */
+  const [customViews, setCustomViews] = React.useState<CustomViewDef[]>([])
+  React.useEffect(() => setCustomViews(readCustomViews()), [])
   // `allMembers` is a live binding that `hydrate()` reassigns. Reading the
   // version here puts this component in the render path of every write, so a
   // member added or frozen elsewhere shows up in the list without a reload.
@@ -61,11 +74,18 @@ export function MembersDirectory() {
     setFilters((prev) => ({ ...prev, search: queryParam }))
   }, [queryParam])
 
+  /** Resolve a view id against the built-ins and this person's own saved ones. */
+  const resolveView = React.useCallback(
+    (id: string | null | undefined): SavedViewDef | undefined =>
+      savedViewById(id) ?? customViews.find((v) => v.id === id),
+    [customViews],
+  )
+
   const appliedRef = React.useRef<string | null>(null)
   React.useEffect(() => {
     if (appliedRef.current === viewParam) return
     appliedRef.current = viewParam
-    const view = savedViewById(viewParam)
+    const view = resolveView(viewParam)
     if (view) {
       setFilters({ ...EMPTY_FILTERS, ...view.filters })
       setSortKey(view.sort.key)
@@ -74,7 +94,7 @@ export function MembersDirectory() {
     } else if (viewParam === null) {
       setActiveView(null)
     }
-  }, [viewParam])
+  }, [viewParam, resolveView])
 
   const filtered = React.useMemo(() => applyFilters(allMembers, filters), [filters, version])
   const rows = React.useMemo(() => applySort(filtered, sortKey, sortDir), [filtered, sortKey, sortDir])
@@ -94,11 +114,11 @@ export function MembersDirectory() {
 
   const viewCounts = React.useMemo(() => {
     const out: Record<string, number> = {}
-    for (const view of SAVED_VIEW_DEFS) {
+    for (const view of [...SAVED_VIEW_DEFS, ...customViews]) {
       out[view.id] = applyFilters(allMembers, { ...EMPTY_FILTERS, ...view.filters }).length
     }
     return out
-  }, [version])
+  }, [version, customViews])
 
   const onSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -133,7 +153,7 @@ export function MembersDirectory() {
   const changeFilters = (next: MemberFilters) => {
     setFilters(next)
     if (activeView) {
-      const view = savedViewById(activeView)
+      const view = resolveView(activeView)
       const preset = { ...EMPTY_FILTERS, ...view?.filters }
       if (JSON.stringify(preset) !== JSON.stringify(next)) {
         setActiveView(null)
@@ -143,12 +163,35 @@ export function MembersDirectory() {
     }
   }
 
+  /** Keep the filters and sort on screen as a view of this person's own. */
+  const saveCurrentView = (label: string) => {
+    const view = saveCustomView(label, filters, sortKey, sortDir)
+    setCustomViews(readCustomViews())
+    setActiveView(view.id)
+    appliedRef.current = view.id
+    router.replace(`/members?view=${view.id}`, { scroll: false })
+  }
+
+  const removeCustomView = (id: string) => {
+    deleteCustomView(id)
+    setCustomViews(readCustomViews())
+    // Deleting the view you are looking at would otherwise leave the rail
+    // highlighting a chip that no longer exists.
+    if (activeView === id) clearView()
+  }
+
+  /** Nothing to save while the list is exactly the unfiltered default. */
+  const filtersTouched =
+    JSON.stringify(filters) !== JSON.stringify(EMPTY_FILTERS) ||
+    sortKey !== 'risk' ||
+    sortDir !== 'desc'
+
   const selectedMembers = React.useMemo(
     () => allMembers.filter((m) => selected.has(m.id)),
     [selected, version],
   )
 
-  const activeViewDef = savedViewById(activeView)
+  const activeViewDef = resolveView(activeView)
   const highRisk = filtered.filter((m) => m.risk.band === 'high').length
   const pastDue = filtered.filter((m) => m.metrics.failedPayments > 0).length
 
@@ -180,8 +223,12 @@ export function MembersDirectory() {
       <MembersSavedViews
         activeId={activeView}
         counts={viewCounts}
+        customViews={customViews}
+        canSave={filtersTouched}
         onSelect={selectView}
         onClear={clearView}
+        onSave={saveCurrentView}
+        onDelete={removeCustomView}
       />
 
       {activeViewDef ? (

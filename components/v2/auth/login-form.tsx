@@ -2,19 +2,22 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useState } from 'react'
-import { Eye, EyeOff, Loader2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Eye, EyeOff, Loader2, Wand2 } from 'lucide-react'
 import { Button } from '@/components/v2/ui/button'
 import { Checkbox } from '@/components/v2/ui/checkbox'
 import { Input } from '@/components/v2/ui/input'
 import { Label } from '@/components/v2/ui/label'
 import { cn } from '@/lib/utils'
 import {
+  DEMO_ACCOUNTS,
   MANAGEMENT_ROLES,
   ROLE_LANDING,
+  isDemoEmail,
   rememberRole,
   type SignInRole,
 } from '@/lib/role-preference'
+import { findAccount } from '@/lib/account-store'
 
 interface FieldErrors {
   email?: string
@@ -34,6 +37,10 @@ interface FieldErrors {
  * These screens sit outside the app shell's React tree, so they cannot call
  * `setRole` directly; the shell reads the choice back when it mounts.
  *
+ * The credentials for the chosen role are filled in automatically, so anyone
+ * evaluating the app can open any of the four screens without first inventing
+ * an account. Typing over them stops the swap — see `isDemoEmail`.
+ *
  * Validation is client-side only. The submit handler is the single place to
  * swap in the real sign-in mutation once one exists — the field state, error
  * rendering and pending UI all stay as they are.
@@ -42,8 +49,8 @@ export function LoginForm() {
   const router = useRouter()
   const [audience, setAudience] = useState<'management' | 'member'>('management')
   const [staffRole, setStaffRole] = useState<SignInRole>('owner')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
+  const [email, setEmail] = useState(DEMO_ACCOUNTS.owner.email)
+  const [password, setPassword] = useState(DEMO_ACCOUNTS.owner.password)
   const [showPassword, setShowPassword] = useState(false)
   const [errors, setErrors] = useState<FieldErrors>({})
   const [pending, setPending] = useState(false)
@@ -53,13 +60,34 @@ export function LoginForm() {
     audience === 'member'
       ? 'Member'
       : (MANAGEMENT_ROLES.find((r) => r.id === staffRole)?.label ?? 'Owner')
+  const demo = DEMO_ACCOUNTS[role]
+
+  /** An account created through sign-up on this device, matched by name or email. */
+  const registered = audience === 'member' ? findAccount(email) : null
+
+  /**
+   * Follow the chosen role with the matching demo credentials — but only while
+   * the field still holds a suggestion. Once somebody types their own address
+   * (or the name they signed up with) switching role must leave it alone.
+   */
+  useEffect(() => {
+    setEmail((current) => (current.trim() === '' || isDemoEmail(current) ? demo.email : current))
+    setPassword((current) => (current === '' || current === demo.password ? demo.password : current))
+  }, [demo])
 
   function validate(): FieldErrors {
     const next: FieldErrors = {}
-    if (!email.trim()) {
-      next.email = audience === 'member' ? 'Enter your email.' : 'Enter your work email.'
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      next.email = 'That email address looks incomplete.'
+    const identifier = email.trim()
+    if (!identifier) {
+      next.email = audience === 'member' ? 'Enter your email or name.' : 'Enter your work email.'
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier)) {
+      // The member door accepts the name somebody signed up with, so a value
+      // without an "@" is only wrong here if no account answers to it.
+      if (audience !== 'member') {
+        next.email = 'That email address looks incomplete.'
+      } else if (!findAccount(identifier)) {
+        next.email = `No account on this device is registered to “${identifier}”. Use the email address, or create an account.`
+      }
     }
     if (!password) {
       next.password = 'Enter your password.'
@@ -80,6 +108,12 @@ export function LoginForm() {
     // so writing it after the push would be one frame too late.
     rememberRole(role)
     router.push(ROLE_LANDING[role])
+  }
+
+  function fillDemo() {
+    setEmail(demo.email)
+    setPassword(demo.password)
+    setErrors({})
   }
 
   return (
@@ -153,14 +187,17 @@ export function LoginForm() {
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="email" className="text-sm">
-          {audience === 'member' ? 'Email' : 'Work email'}
+          {audience === 'member' ? 'Email or name' : 'Work email'}
         </Label>
         <Input
           id="email"
           name="email"
-          type="email"
-          autoComplete="email"
-          placeholder="you@yourgym.com"
+          // Not type="email" on the member door: the field accepts the name
+          // somebody signed up with, and the browser's own validation would
+          // reject that before this form ever saw it.
+          type={audience === 'member' ? 'text' : 'email'}
+          autoComplete={audience === 'member' ? 'username' : 'email'}
+          placeholder={audience === 'member' ? 'you@example.com or your name' : 'you@yourgym.com'}
           value={email}
           onChange={(event) => setEmail(event.target.value)}
           aria-invalid={Boolean(errors.email)}
@@ -170,6 +207,13 @@ export function LoginForm() {
         {errors.email && (
           <p id="email-error" role="alert" className="text-xs text-destructive">
             {errors.email}
+          </p>
+        )}
+        {!errors.email && registered && (
+          <p className="text-xs text-muted-foreground">
+            Signing in as{' '}
+            <strong className="font-medium text-foreground">{registered.name}</strong> — the account
+            created on this device.
           </p>
         )}
       </div>
@@ -224,6 +268,29 @@ export function LoginForm() {
         <Label htmlFor="remember" className="text-sm font-normal text-muted-foreground">
           Keep me signed in on this device
         </Label>
+      </div>
+
+      {/* The demo account is filled in already; this says so, names whose
+          account it is, and offers to put it back if the fields were edited.
+          It also states plainly that nothing is checked, rather than letting the
+          password box imply a check that no code performs. */}
+      <div className="flex items-start gap-3 rounded-xl border border-dashed border-border bg-secondary/40 p-3">
+        <Wand2 className="mt-0.5 size-4 shrink-0 text-brand" aria-hidden="true" />
+        <div className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">
+          <p>
+            <strong className="font-medium text-foreground">Demo account ready</strong> —{' '}
+            {demo.person} · {demo.email}. Press{' '}
+            <span className="font-medium text-foreground">Sign in as {roleLabel}</span> to go
+            straight in; this build accepts any credentials.
+          </p>
+          <button
+            type="button"
+            onClick={fillDemo}
+            className="mt-1 font-medium text-brand underline-offset-2 hover:underline"
+          >
+            Refill the {roleLabel.toLowerCase()} account
+          </button>
+        </div>
       </div>
 
       <Button

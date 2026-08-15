@@ -9,6 +9,7 @@ import { Checkbox } from '@/components/v2/ui/checkbox'
 import { Input } from '@/components/v2/ui/input'
 import { Label } from '@/components/v2/ui/label'
 import { ROLE_LANDING, rememberRole } from '@/lib/role-preference'
+import { registerAccount } from '@/lib/account-store'
 import { cn } from '@/lib/v2/utils'
 
 interface FieldErrors {
@@ -34,8 +35,14 @@ function scorePassword(value: string): { score: number; label: string } {
 /**
  * Account creation form.
  *
- * Same contract as the login form: validate here, then hand off to the tRPC
- * `auth.signUp` mutation when the backend lands.
+ * Everyone who signs up here becomes a **member** and lands in the member
+ * portal. Staff accounts are issued by the studio, not claimed from a public
+ * form — sending a self-registered account to the owner dashboard would hand
+ * the back office, and 380 people's contact and payment records, to anybody who
+ * filled in four fields.
+ *
+ * Same contract as the login form otherwise: validate here, then hand off to the
+ * tRPC `auth.signUp` mutation when the backend lands.
  */
 export function SignupForm() {
   const router = useRouter()
@@ -53,9 +60,9 @@ export function SignupForm() {
   function validate(): FieldErrors {
     const next: FieldErrors = {}
     if (!name.trim()) next.name = 'Enter your full name.'
-    if (!gym.trim()) next.gym = 'Enter your gym or studio name.'
+    if (!gym.trim()) next.gym = 'Enter the gym or studio you train at.'
     if (!email.trim()) {
-      next.email = 'Enter your work email.'
+      next.email = 'Enter your email.'
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       next.email = 'That email address looks incomplete.'
     }
@@ -76,12 +83,14 @@ export function SignupForm() {
 
     setPending(true)
     await new Promise((resolve) => setTimeout(resolve, 600))
-    // Signing up creates the gym's account, so the new session is the owner.
-    // Setting it explicitly also clears any role left over from a previous
-    // sign-in on this browser — otherwise a member who signs up would be sent
-    // to the owner dashboard while the shell still thought they were a member.
-    rememberRole('owner')
-    router.push(ROLE_LANDING.owner)
+    // Remember the registration so this person can sign back in with the name
+    // they just typed, not only the address (see lib/account-store.ts).
+    registerAccount(name, email)
+    // Setting the role explicitly also clears whatever was left over from a
+    // previous sign-in on this browser — otherwise somebody who signed up right
+    // after an owner demo would be dropped into the back office.
+    rememberRole('member')
+    router.push(ROLE_LANDING.member)
   }
 
   return (
@@ -111,13 +120,13 @@ export function SignupForm() {
 
         <div className="flex flex-col gap-2">
           <Label htmlFor="gym" className="text-sm">
-            Gym name
+            Your gym
           </Label>
           <Input
             id="gym"
             name="gym"
             autoComplete="organization"
-            placeholder="Ironworks Collective"
+            placeholder="Riverside"
             value={gym}
             onChange={(event) => setGym(event.target.value)}
             aria-invalid={Boolean(errors.gym)}
@@ -134,7 +143,7 @@ export function SignupForm() {
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="signup-email" className="text-sm">
-          Work email
+          Email
         </Label>
         <Input
           id="signup-email"
@@ -256,6 +265,12 @@ export function SignupForm() {
           'Create account'
         )}
       </Button>
+
+      <p className="rounded-xl border border-border bg-card p-3 text-xs leading-relaxed text-muted-foreground">
+        This creates a <strong className="font-medium text-foreground">member</strong> account and
+        opens your portal. Next time you can sign in with either this email or the name you just
+        entered.
+      </p>
 
       <p className="text-center text-sm text-muted-foreground">
         Already have an account?{' '}

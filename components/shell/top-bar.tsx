@@ -2,10 +2,12 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { Bell, Check, ChevronDown, Menu, Search } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { Bell, Check, ChevronDown, LogOut, Menu, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { useApp, LOCATIONS, ROLES, type Role } from '@/components/shell/role-context'
+import { useApp, LOCATIONS } from '@/components/shell/role-context'
+import { forgetRole } from '@/lib/role-preference'
 
 /** Lightweight popover: click-outside + Esc. No dependency needed. */
 function Popover({
@@ -96,7 +98,8 @@ export function TopBar({
   onOpenSidebar?: () => void
   className?: string
 }) {
-  const { role, roleMeta, setRole, location, setLocation, unread, setCommandOpen } = useApp()
+  const { roleMeta, location, setLocation, unread, setCommandOpen } = useApp()
+  const router = useRouter()
   const searchRef = React.useRef<HTMLInputElement>(null)
 
   // "/" focuses search, Cmd+K opens the palette (Batch 9 renders it).
@@ -134,46 +137,6 @@ export function TopBar({
       >
         <Menu className="size-4" />
       </Button>
-
-      {/* role switcher — reshapes navigation and landing page */}
-      <Popover
-        width="w-72"
-        trigger={({ open, toggle }) => (
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={toggle}
-            className="flex h-7 items-center gap-1.5 rounded-md border border-border bg-surface px-2 text-sm transition-colors hover:border-border-strong focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-          >
-            <span className="text-micro tracking-wide text-muted-foreground uppercase">Role</span>
-            <span className="font-medium text-foreground">{roleMeta.label}</span>
-            <ChevronDown className="size-3 text-muted-foreground" />
-          </button>
-        )}
-      >
-        {(close) => (
-          <div className="py-1">
-            <p className="px-2.5 py-1 text-micro font-medium tracking-wide text-muted-foreground uppercase">
-              View the product as
-            </p>
-            {ROLES.map((r) => (
-              <MenuRow
-                key={r.id}
-                primary={`${r.label} — ${r.person}`}
-                secondary={r.context}
-                selected={r.id === role}
-                onClick={() => {
-                  setRole(r.id as Role)
-                  close()
-                }}
-              />
-            ))}
-            <p className="border-t border-border px-2.5 py-1.5 text-micro leading-relaxed text-muted-foreground">
-              Switching roles changes navigation, permitted screens and where you land.
-            </p>
-          </div>
-        )}
-      </Popover>
 
       {/* location switcher */}
       <Popover
@@ -250,16 +213,65 @@ export function TopBar({
         ) : null}
       </Link>
 
-      <span
-        aria-hidden
-        title={roleMeta.person}
-        className="flex size-7 shrink-0 items-center justify-center rounded-full border border-border bg-muted text-micro font-semibold text-muted-foreground"
+      {/*
+        Who you are signed in as — and nothing more.
+
+        This used to be a role SWITCHER, which meant a member could read the
+        owner's navigation off a dropdown and step into it. Your own role is
+        fine to show; the whole staff hierarchy is not. Changing role now means
+        signing out and back in through the door that role belongs to.
+      */}
+      <Popover
+        align="end"
+        width="w-60"
+        trigger={({ open, toggle }) => (
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-label={`Signed in as ${roleMeta.person}, ${roleMeta.label}`}
+            onClick={toggle}
+            className="flex h-7 shrink-0 items-center gap-1.5 rounded-md pl-0.5 pr-1 transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+          >
+            <span
+              aria-hidden
+              className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border bg-muted text-micro font-semibold text-muted-foreground"
+            >
+              {roleMeta.person
+                .split(' ')
+                .map((p) => p[0])
+                .join('')}
+            </span>
+            <span className="hidden text-sm font-medium text-foreground sm:inline">
+              {roleMeta.label}
+            </span>
+            <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+          </button>
+        )}
       >
-        {roleMeta.person
-          .split(' ')
-          .map((p) => p[0])
-          .join('')}
-      </span>
+        {() => (
+          <div className="py-1">
+            <div className="px-2.5 py-1.5 leading-tight">
+              <p className="truncate text-sm font-medium text-foreground">{roleMeta.person}</p>
+              <p className="truncate text-micro text-muted-foreground">
+                {roleMeta.label} · {roleMeta.context}
+              </p>
+            </div>
+            <div className="border-t border-border pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  forgetRole()
+                  router.push('/login')
+                }}
+                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm text-foreground transition-colors duration-150 hover:bg-muted"
+              >
+                <LogOut className="size-3.5 text-muted-foreground" />
+                Sign out
+              </button>
+            </div>
+          </div>
+        )}
+      </Popover>
     </header>
   )
 }
