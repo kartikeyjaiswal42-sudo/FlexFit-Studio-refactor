@@ -77,10 +77,17 @@ section('Sign-in fills in an account for every role')
 /* ====================================================================== */
 await go('/login')
 
-// The member door is the default one.
-;(await page.getByRole('radio', { name: 'Member sign in' }).getAttribute('aria-checked')) === 'true'
-  ? ok('the sign-in page opens on Member sign in')
-  : bad('the sign-in page does not default to Member sign in')
+// Management is the default door, with the owner account already in the fields.
+;(await page.getByRole('radio', { name: 'Management sign in' }).getAttribute('aria-checked')) === 'true'
+  ? ok('the sign-in page opens on Management sign in')
+  : bad('the sign-in page does not default to Management sign in')
+;(await page.inputValue('#email')) === 'dana.okonkwo@flexfitstudio.in'
+  ? ok('and opens with the owner account filled in')
+  : bad(`it opens with "${await page.inputValue('#email')}" in the email field`)
+
+// The member door still fills itself in when you switch to it.
+await page.getByRole('radio', { name: 'Member sign in' }).click()
+await waitFor(async () => (await page.inputValue('#email')) === 'tomas.lindqvist@example.com')
 ;(await page.inputValue('#email')) === 'tomas.lindqvist@example.com'
   ? ok('Member: email is filled in as tomas.lindqvist@example.com')
   : bad(`Member: email reads "${await page.inputValue('#email')}"`)
@@ -150,9 +157,12 @@ const shellRole = await page
   ? ok('the new account is a Member')
   : bad(`the new account signed in as "${shellRole.trim()}"`)
 
-// Now sign in again with the NAME rather than the email. Member is already the
-// default door, so there is nothing to switch.
+// Now sign in again with the NAME rather than the email. A name is only valid
+// on the MEMBER door — the management door wants a work email and says so — so
+// the switch is part of what is being tested here, not setup noise.
 await go('/login')
+await page.getByRole('radio', { name: 'Member sign in' }).click()
+await waitFor(async () => (await page.inputValue('#email')).length > 0)
 await page.fill('#email', who)
 await page.fill('#password', 'a-long-enough-password')
 const recognised = await waitFor(async () =>

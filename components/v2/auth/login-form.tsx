@@ -48,17 +48,17 @@ interface FieldErrors {
 export function LoginForm() {
   const router = useRouter()
   /**
-   * Member is the default door.
+   * Management is the default door, with the owner account already filled in.
    *
-   * Most people arriving at a sign-in screen are members; staff are a handful
-   * of people who know which door is theirs. Management is one tap away and
-   * keeps its own filled-in accounts — flip this constant to swap the default
-   * back, nothing else depends on it.
+   * Whoever opens this app is here to look at the studio it runs, so the first
+   * screen offered is the one that shows it. Member sign in is one tap away and
+   * keeps its own filled-in account — these three lines are the whole switch,
+   * nothing else depends on which door starts open.
    */
-  const [audience, setAudience] = useState<'management' | 'member'>('member')
+  const [audience, setAudience] = useState<'management' | 'member'>('management')
   const [staffRole, setStaffRole] = useState<SignInRole>('owner')
-  const [email, setEmail] = useState(DEMO_ACCOUNTS.member.email)
-  const [password, setPassword] = useState(DEMO_ACCOUNTS.member.password)
+  const [email, setEmail] = useState(DEMO_ACCOUNTS.owner.email)
+  const [password, setPassword] = useState(DEMO_ACCOUNTS.owner.password)
   const [showPassword, setShowPassword] = useState(false)
   const [errors, setErrors] = useState<FieldErrors>({})
   const [pending, setPending] = useState(false)
