@@ -77,6 +77,17 @@ section('Sign-in fills in an account for every role')
 /* ====================================================================== */
 await go('/login')
 
+// The member door is the default one.
+;(await page.getByRole('radio', { name: 'Member sign in' }).getAttribute('aria-checked')) === 'true'
+  ? ok('the sign-in page opens on Member sign in')
+  : bad('the sign-in page does not default to Member sign in')
+;(await page.inputValue('#email')) === 'tomas.lindqvist@example.com'
+  ? ok('Member: email is filled in as tomas.lindqvist@example.com')
+  : bad(`Member: email reads "${await page.inputValue('#email')}"`)
+
+await page.getByRole('radio', { name: 'Management sign in' }).click()
+await page.waitForTimeout(300)
+
 for (const [role, expectEmail] of [
   ['Owner', 'dana.okonkwo@flexfitstudio.in'],
   ['Trainer', 'priya.raghunathan@flexfitstudio.in'],
@@ -139,9 +150,9 @@ const shellRole = await page
   ? ok('the new account is a Member')
   : bad(`the new account signed in as "${shellRole.trim()}"`)
 
-// Now sign in again with the NAME rather than the email.
+// Now sign in again with the NAME rather than the email. Member is already the
+// default door, so there is nothing to switch.
 await go('/login')
-await page.getByRole('radio', { name: 'Member sign in' }).click()
 await page.fill('#email', who)
 await page.fill('#password', 'a-long-enough-password')
 const recognised = await waitFor(async () =>
@@ -330,7 +341,37 @@ const railOpened = await waitFor(async () => (await page.locator('aside').count(
 railOpened ? ok('clicking a class opens its detail panel') : bad('clicking a class opened nothing')
 
 /* ====================================================================== */
-section('Reports carry a summary, a chart and a sort')
+section('Retention rows can contact the member')
+/* ====================================================================== */
+await go('/retention')
+const retentionEmail = page
+  .locator('table')
+  .getByRole('button', { name: /^email$/i })
+  .first()
+;(await retentionEmail.count()) > 0
+  ? ok('every queue row offers Email — the play these rows exist to run')
+  : bad('the intervention queue still cannot contact anybody')
+if (await retentionEmail.count()) {
+  await retentionEmail.click()
+  const opened = await waitFor(async () => (await page.getByRole('dialog').count()) > 0)
+  opened ? ok('the retention Email button opens a compose box') : bad('the retention Email button did nothing')
+  if (opened) {
+    // Assert on the FIELDS, and wait for them: reading the dialog's text the
+    // instant it mounts catches it before the template has been applied, which
+    // reads as an empty compose box when it is only an early read.
+    const filled = await waitFor(
+      async () => (await page.locator('[role="dialog"] textarea').first().inputValue()).length > 100,
+    )
+    const subject = await page.locator('[role="dialog"] input').first().inputValue().catch(() => '')
+    filled && subject.length > 0
+      ? ok(`the message is written from that row's own play ("${subject}")`)
+      : bad(`the compose box came up empty (subject "${subject}")`)
+    await page.keyboard.press('Escape')
+  }
+}
+
+/* ====================================================================== */
+section('Reports carry a summary, a chart, insights, slices and a sort')
 /* ====================================================================== */
 await go('/reports/revenue-by-plan')
 const reportText = await page.locator('body').innerText()
@@ -344,6 +385,10 @@ const reportText = await page.locator('body').innerText()
   ? ok('rows can be searched within a report')
   : bad('no in-report search')
 
+;/what the numbers say/i.test(reportText)
+  ? ok('the report states findings its own table supports')
+  : bad('no insights block')
+
 const firstCellBefore = await page.locator('tbody tr td:nth-child(2)').first().innerText()
 await page.locator('thead th button').nth(1).click()
 await page.waitForTimeout(400)
@@ -351,6 +396,18 @@ const firstCellAfter = await page.locator('tbody tr td:nth-child(2)').first().in
 firstCellBefore !== firstCellAfter
   ? ok(`sorting reorders the table (${firstCellBefore.trim()} → ${firstCellAfter.trim()})`)
   : bad('clicking a column heading did not reorder anything')
+
+// Slices. "Below average" must genuinely return fewer rows than the whole set.
+const allRows = await page.locator('tbody tr').count()
+await page.getByRole('button', { name: /below average/i }).first().click()
+await waitFor(async () => (await page.locator('tbody tr').count()) !== allRows)
+const belowRows = await page.locator('tbody tr').count()
+belowRows > 0 && belowRows < allRows
+  ? ok(`"Below average" narrows ${allRows} rows to ${belowRows}`)
+  : bad(`"Below average" left ${belowRows} of ${allRows} rows`)
+await page.getByRole('button', { name: /^all rows$/i }).first().click()
+await waitFor(async () => (await page.locator('tbody tr').count()) === allRows)
+ok('and "All rows" puts them back')
 
 /* ====================================================================== */
 section('Members: saving a view of your own')

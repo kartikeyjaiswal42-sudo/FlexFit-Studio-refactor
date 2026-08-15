@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { Clock, UserPlus, Check } from 'lucide-react'
+import { Clock, Mail, UserPlus, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Card, CardHeader, CardBody, CardFooter } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { RiskScore, StatusChip } from '@/components/ui/status-chip'
 import { ViewToggle } from '@/components/ui/tabs'
+import { ComposeEmailDialog } from '@/components/comms/compose-email-dialog'
 import {
   CellStack,
   SerialTd,
@@ -44,6 +45,85 @@ type Filter = 'all' | 'mine' | 'unassigned'
 const CURRENT_STAFF_ID = assignableStaff[0]?.id ?? null
 
 /**
+ * The message for a row, written from that row's own play.
+ *
+ * Deliberately specific and short. The reason each play exists is that the
+ * right approach differs — somebody whose card failed needs a different note
+ * from somebody who has stopped turning up — and a single generic "we miss you"
+ * template would throw that distinction away. None of them pitch, because the
+ * plays say not to.
+ */
+function emailTemplateFor(item: InterventionItem) {
+  const first = item.member.firstName
+  const gap = item.member.metrics.daysSinceLastVisit
+  const play = PLAYS[item.play]
+
+  const body = {
+    call: [
+      `Hi ${first},`,
+      '',
+      gap === null
+        ? 'We have not seen you in a while and wanted to check in.'
+        : `We noticed it has been ${gap} days since your last visit.`,
+      '',
+      'Nothing to sort out — just wanted to ask how things are going, and whether there is a time of day that would work better for you than the one you used to come in at.',
+      '',
+      'Reply here, or call the desk and ask for whoever picks up.',
+      '',
+      'FlexFit Studio',
+    ],
+    sms: [
+      `Hi ${first},`,
+      '',
+      'There is space in a couple of the quieter sessions this week if you fancy getting back in.',
+      '',
+      'Reply with a day that suits and we will hold you a spot.',
+      '',
+      'FlexFit Studio',
+    ],
+    'trainer-checkin': [
+      `Hi ${first},`,
+      '',
+      'Your trainer asked me to get in touch — they wanted to check in rather than let another few weeks go by.',
+      '',
+      'If you would like to pick the programme back up, reply with a couple of times that suit and we will get you booked with them.',
+      '',
+      'FlexFit Studio',
+    ],
+    'billing-fix': [
+      `Hi ${first},`,
+      '',
+      'A payment on your membership did not go through. This is almost always an expired card rather than anything you have done.',
+      '',
+      'Your membership is unaffected while we sort it. Reply here or drop by the desk and it takes a minute.',
+      '',
+      'FlexFit Studio',
+    ],
+    'plan-review': [
+      `Hi ${first},`,
+      '',
+      `You are on a plan that allows more than you have been using lately — ${item.member.metrics.visitsLast30} visits in the last 30 days.`,
+      '',
+      'We would rather move you to something that fits than have you pay for sessions you are not taking. Reply and we will go through the options.',
+      '',
+      'FlexFit Studio',
+    ],
+  }[item.play]
+
+  return {
+    label: play.label,
+    subject: {
+      call: 'Checking in',
+      sms: 'A spot this week if you want it',
+      'trainer-checkin': `${item.member.firstName}, from your trainer`,
+      'billing-fix': 'A payment did not go through',
+      'plan-review': 'Your plan versus how you are using it',
+    }[item.play],
+    body: body.join('\n'),
+  }
+}
+
+/**
  * The intervention queue. Ordered by risk × value, because ordering by risk
  * alone sends staff after members who were never worth the hour. Every row
  * carries the play to run, so the queue is executable rather than informational.
@@ -61,6 +141,7 @@ export function InterventionQueue({ className }: { className?: string }) {
   const [query, setQuery] = React.useState('')
   const [assigning, setAssigning] = React.useState<InterventionItem | null>(null)
   const [snoozing, setSnoozing] = React.useState<InterventionItem | null>(null)
+  const [emailing, setEmailing] = React.useState<InterventionItem | null>(null)
 
   /**
    * The stored decision for a row, falling back to the generated owner when
@@ -305,6 +386,20 @@ export function InterventionQueue({ className }: { className?: string }) {
                           <UserPlus className="size-3" />
                           Assign
                         </Button>
+                        {/* The queue could assign the work, postpone it and
+                            declare it done — but not DO it. Every play here is
+                            a contact script, so the one action the screen
+                            existed for was the one it could not perform. */}
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          disabled={connection !== 'live'}
+                          title={`Email ${item.member.name} — ${PLAYS[item.play].label}`}
+                          onClick={() => setEmailing(item)}
+                        >
+                          <Mail className="size-3" />
+                          Email
+                        </Button>
                         <Button
                           size="xs"
                           variant="ghost"
@@ -341,6 +436,25 @@ export function InterventionQueue({ className }: { className?: string }) {
           {num(doneCount)} contacted · {num(snoozedCount)} snoozed
         </span>
       </CardFooter>
+
+      {emailing ? (
+        <ComposeEmailDialog
+          open
+          onClose={() => setEmailing(null)}
+          to={emailing.member.email}
+          toName={emailing.member.name}
+          title={`Email ${emailing.member.name}`}
+          send={({ subject, body }) =>
+            api.comms.emailMember.mutate({ memberId: emailing.member.id, subject, body })
+          }
+          /* One template per play, written from that play's own script, so the
+             message matches the reason this member is in the queue. Sending it
+             does NOT clear the row — "Done" is a separate, deliberate act, and
+             a queue that empties itself on a send would count an unanswered
+             email as a save. */
+          templates={[emailTemplateFor(emailing)]}
+        />
+      ) : null}
 
       <Modal
         open={assigning !== null}

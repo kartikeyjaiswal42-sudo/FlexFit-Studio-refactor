@@ -39,7 +39,8 @@
     "test:routes": "node scripts/test-routes.mjs",
     "test:front-door": "node scripts/test-front-door.mjs",
     "test:signin-roles": "node scripts/test-signin-roles.mjs",
-    "test:fixes": "node scripts/test-fixes-ui.mjs"
+    "test:fixes": "node scripts/test-fixes-ui.mjs",
+    "test:new-member": "node scripts/test-new-member-invoice.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

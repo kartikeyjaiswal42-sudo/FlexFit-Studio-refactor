@@ -31,7 +31,17 @@ import { NOW } from '@/lib/seed'
 import type { CellTone } from './reports-data'
 import { getReport, reportRecipients } from './reports-data'
 import { ReportChart } from './report-chart'
-import { classifyColumns, filterRows, sortRows, summarise } from './report-analysis'
+import { FilterBar, FilterTrigger } from '@/components/ui/filter-chip'
+import {
+  ROW_SCOPES,
+  classifyColumns,
+  deriveInsights,
+  filterRows,
+  scopeRows,
+  sortRows,
+  summarise,
+  type RowScope,
+} from './report-analysis'
 
 const TONE_CLASS: Record<CellTone, string> = {
   default: '',
@@ -51,6 +61,7 @@ export function ReportView({ slug }: { slug: string }) {
   const version = useDataVersion()
   const [emailOpen, setEmailOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
+  const [scope, setScope] = React.useState<RowScope>('all')
   const [sort, setSort] = React.useState<{ index: number; dir: 'asc' | 'desc' } | null>(null)
   const report = getReport(slug)
   const result = React.useMemo(() => report?.run(), [report, version])
@@ -68,24 +79,46 @@ export function ReportView({ slug }: { slug: string }) {
     [result],
   )
 
-  /** Search first, then sort: sorting a filtered list is the cheaper order. */
+  /**
+   * The column every slice is measured against: whichever the reader sorted by
+   * if it holds numbers, otherwise the first numeric column. "Top 10" has to
+   * mean top by something, and the column somebody just sorted on is the one
+   * they are thinking in.
+   */
+  const leadIndex = React.useMemo(() => {
+    if (sort && kinds[sort.index] && kinds[sort.index] !== 'label') return sort.index
+    return kinds.findIndex((k) => k !== 'label')
+  }, [sort, kinds])
+
+  /** Search, then slice, then sort — each step narrows what the next one sees. */
   const rows = React.useMemo(() => {
     if (!result) return []
-    const found = filterRows(result.rows, query)
+    const found = scopeRows(filterRows(result.rows, query), scope, leadIndex)
     if (!sort) return found
     return sortRows(found, sort.index, sort.dir, kinds[sort.index] ?? 'label')
-  }, [result, query, sort, kinds])
+  }, [result, query, scope, leadIndex, sort, kinds])
 
   const summary = React.useMemo(
     () => (result ? summarise(result.columns, rows, kinds) : []),
     [result, rows, kinds],
   )
 
-  // Changing report resets the reader's view of it; leaving a sort or a search
-  // applied across a navigation makes the next report look like it has fewer
-  // rows than it does.
+  /**
+   * Insights are derived from the WHOLE result, not the current slice — the
+   * point of "the top 3 rows carry 62%" is the shape of the full table, and
+   * recomputing it inside a "top 10" filter would report 100% every time.
+   */
+  const insights = React.useMemo(
+    () => (result ? deriveInsights(result.columns, result.rows, kinds) : []),
+    [result, kinds],
+  )
+
+  // Changing report resets the reader's view of it; leaving a sort, a slice or
+  // a search applied across a navigation makes the next report look like it has
+  // fewer rows than it does.
   React.useEffect(() => {
     setQuery('')
+    setScope('all')
     setSort(null)
   }, [slug])
 
@@ -216,6 +249,39 @@ export function ReportView({ slug }: { slug: string }) {
           </Card>
         ) : null}
 
+        {/*
+          Findings the table itself supports — concentration, spread, how many
+          rows sit below the average, how many the report flagged. Arithmetic
+          only: nothing here guesses at a cause, because a plausible-sounding
+          reason printed beside a real number is how a reports screen starts
+          being quoted for things it never measured.
+        */}
+        {insights.length > 0 ? (
+          <Card>
+            <CardHeader
+              title="What the numbers say"
+              description="Derived from the full result, not the slice on screen."
+            />
+            <div className="grid gap-px bg-border sm:grid-cols-2">
+              {insights.map((insight) => (
+                <div key={insight.label} className="bg-card px-4 py-3">
+                  <p
+                    className={cn(
+                      'text-micro font-medium tracking-wide uppercase',
+                      insight.tone === 'warn' ? 'text-warn' : 'text-muted-foreground',
+                    )}
+                  >
+                    {insight.label}
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed text-foreground text-pretty">
+                    {insight.text}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </Card>
+        ) : null}
+
         <ReportChart columns={result.columns} rows={rows} kinds={kinds} />
 
         <Card className="overflow-hidden">
@@ -246,12 +312,47 @@ export function ReportView({ slug }: { slug: string }) {
               </div>
             }
           />
+          {/* Slices of the result. "Below average" is the one that earns its
+              place: on most of these reports the rows worth acting on are the
+              weak ones, and picking them out of a 40-row table by eye is how
+              they get missed. */}
+          <FilterBar resultCount={rows.length} totalCount={result.rows.length}>
+            {ROW_SCOPES.map((s) => (
+              <FilterTrigger
+                key={s.id}
+                label={s.label}
+                title={s.hint}
+                active={scope === s.id}
+                onClick={() => setScope(s.id)}
+              />
+            ))}
+            {leadIndex >= 0 && scope !== 'all' && scope !== 'flagged' ? (
+              <span className="text-micro text-muted-foreground">
+                measured on {result.columns[leadIndex].label}
+              </span>
+            ) : null}
+          </FilterBar>
+
           {rows.length === 0 ? (
             <div className="p-4">
               <EmptyState
-                title={`No row matches “${query.trim()}”`}
-                description="Search looks at every cell in the table, not just the first column."
-                action={{ label: 'Clear the search', onClick: () => setQuery('') }}
+                title={
+                  query.trim()
+                    ? `No row matches “${query.trim()}”`
+                    : `No rows are ${ROW_SCOPES.find((s) => s.id === scope)?.label.toLowerCase()}`
+                }
+                description={
+                  query.trim()
+                    ? 'Search looks at every cell in the table, not just the first column.'
+                    : 'That is a real answer about this report, not a missing result.'
+                }
+                action={{
+                  label: 'Show every row',
+                  onClick: () => {
+                    setQuery('')
+                    setScope('all')
+                  },
+                }}
               />
             </div>
           ) : (

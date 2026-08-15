@@ -160,3 +160,140 @@ export function filterRows(rows: ReportRow[], query: string): ReportRow[] {
   if (!q) return rows
   return rows.filter((row) => row.cells.some((cell) => String(cell).toLowerCase().includes(q)))
 }
+
+export type RowScope = 'all' | 'top' | 'above' | 'below' | 'flagged'
+
+export const ROW_SCOPES: { id: RowScope; label: string; hint: string }[] = [
+  { id: 'all', label: 'All rows', hint: 'The whole result' },
+  { id: 'top', label: 'Top 10', hint: 'The ten largest by the leading column' },
+  { id: 'above', label: 'Above average', hint: 'Rows above the mean of the leading column' },
+  { id: 'below', label: 'Below average', hint: 'Rows below the mean — usually the ones to act on' },
+  { id: 'flagged', label: 'Flagged', hint: 'Rows the report itself marked as warning or danger' },
+]
+
+/**
+ * Narrow the result to a slice worth looking at.
+ *
+ * "Below average" is the one that earns its place: on almost every report here
+ * the interesting rows are the weak ones — the classes nobody books, the plans
+ * nobody renews — and finding them by eye in a 40-row table is how they get
+ * missed. `index` is the column the slice is measured on, which is the sorted
+ * column when the reader has picked one and the first numeric column otherwise.
+ */
+export function scopeRows(rows: ReportRow[], scope: RowScope, index: number): ReportRow[] {
+  if (scope === 'all') return rows
+  if (scope === 'flagged') return rows.filter((r) => r.tone === 'warn' || r.tone === 'danger')
+  if (index < 0) return rows
+
+  const valued = rows
+    .map((row) => ({ row, value: numericValue(row.cells[index] ?? '') }))
+    .filter((v): v is { row: ReportRow; value: number } => v.value !== null)
+  if (valued.length === 0) return rows
+
+  if (scope === 'top') {
+    return [...valued].sort((a, b) => b.value - a.value).slice(0, 10).map((v) => v.row)
+  }
+  const mean = valued.reduce((s, v) => s + v.value, 0) / valued.length
+  return valued.filter((v) => (scope === 'above' ? v.value > mean : v.value < mean)).map((v) => v.row)
+}
+
+export interface Insight {
+  /** Short heading — what the sentence is about. */
+  label: string
+  /** The finding, in one sentence. */
+  text: string
+  tone: 'default' | 'warn'
+}
+
+/**
+ * Findings the report's own numbers support, and nothing more.
+ *
+ * Every sentence here is arithmetic over the rendered table: concentration,
+ * spread, how many rows sit either side of the mean, how many the report itself
+ * flagged. Nothing is inferred about WHY, because the data cannot support that
+ * and a plausible-sounding cause printed next to a real number is the most
+ * dangerous thing a reports screen can do.
+ *
+ * A finding is omitted rather than softened when the shape of the data will not
+ * support it — one row cannot be concentrated, and a column containing a zero
+ * has no meaningful ratio between its largest and smallest values.
+ */
+export function deriveInsights(
+  columns: ReportColumn[],
+  rows: ReportRow[],
+  kinds: ColumnKind[],
+): Insight[] {
+  const out: Insight[] = []
+  if (rows.length === 0) return out
+
+  const labelIndex = kinds.findIndex((k) => k === 'label')
+  const leadIndex = kinds.findIndex((k) => k !== 'label')
+  if (leadIndex < 0) return out
+
+  const label = columns[leadIndex].label
+  const valued = rows
+    .map((row) => ({ row, value: numericValue(row.cells[leadIndex] ?? '') }))
+    .filter((v): v is { row: ReportRow; value: number } => v.value !== null)
+  if (valued.length === 0) return out
+
+  const nameOf = (row: ReportRow) => (labelIndex >= 0 ? String(row.cells[labelIndex] ?? '') : 'that row')
+  const sorted = [...valued].sort((a, b) => b.value - a.value)
+  const total = valued.reduce((s, v) => s + v.value, 0)
+  const mean = total / valued.length
+
+  // Concentration. Only meaningful for things that add up — a share column
+  // summing to 100 would produce a true but useless "the top 3 hold 62%".
+  if (kinds[leadIndex] !== 'percent' && valued.length >= 4 && total > 0) {
+    const take = Math.min(3, Math.max(1, Math.floor(valued.length / 3)))
+    const share = (sorted.slice(0, take).reduce((s, v) => s + v.value, 0) / total) * 100
+    out.push({
+      label: 'Concentration',
+      text: `The top ${take} of ${valued.length} rows carry ${share.toFixed(0)}% of ${label.toLowerCase()} — ${sorted
+        .slice(0, take)
+        .map((v) => nameOf(v.row))
+        .join(', ')}.`,
+      tone: share >= 60 ? 'warn' : 'default',
+    })
+  }
+
+  // Spread. Skipped when the smallest value is zero: a ratio against nothing is
+  // infinite, not large.
+  const smallest = sorted[sorted.length - 1]
+  const largest = sorted[0]
+  if (valued.length >= 2 && smallest.value > 0 && largest.value !== smallest.value) {
+    out.push({
+      label: 'Spread',
+      text: `${nameOf(largest.row)} is ${(largest.value / smallest.value).toFixed(1)}× ${nameOf(smallest.row)} on ${label.toLowerCase()}.`,
+      tone: 'default',
+    })
+  }
+
+  const below = valued.filter((v) => v.value < mean).length
+  if (valued.length >= 3) {
+    out.push({
+      label: 'Distribution',
+      text: `${below} of ${valued.length} rows fall below the average — the average is pulled up by the top of the list, not typical of it.`,
+      tone: 'default',
+    })
+  }
+
+  const flagged = rows.filter((r) => r.tone === 'warn' || r.tone === 'danger').length
+  if (flagged > 0) {
+    out.push({
+      label: 'Flagged by the report',
+      text: `${flagged} of ${rows.length} rows are marked as needing attention by this report's own thresholds.`,
+      tone: 'warn',
+    })
+  }
+
+  const zeros = valued.filter((v) => v.value === 0).length
+  if (zeros > 0) {
+    out.push({
+      label: 'Empty rows',
+      text: `${zeros} ${zeros === 1 ? 'row contributes' : 'rows contribute'} nothing to ${label.toLowerCase()} at all.`,
+      tone: 'warn',
+    })
+  }
+
+  return out
+}
