@@ -8,6 +8,13 @@ import { Button } from '@/components/v2/ui/button'
 import { Checkbox } from '@/components/v2/ui/checkbox'
 import { Input } from '@/components/v2/ui/input'
 import { Label } from '@/components/v2/ui/label'
+import { cn } from '@/lib/utils'
+import {
+  MANAGEMENT_ROLES,
+  ROLE_LANDING,
+  rememberRole,
+  type SignInRole,
+} from '@/lib/role-preference'
 
 interface FieldErrors {
   email?: string
@@ -17,22 +24,40 @@ interface FieldErrors {
 /**
  * Sign-in form.
  *
- * Validation is client-side only for now. The submit handler is the single
- * place to swap in the tRPC `auth.signIn` mutation once the router exists —
- * the field state, error rendering and pending UI all stay as they are.
+ * Two doors, because the two audiences want opposite things: staff want the
+ * workspace, members want their own account. The management door then asks
+ * WHICH staff — owner, trainer or front desk — because each has a different
+ * home screen and sees a different subset of the app, and landing on somebody
+ * else's screen is the same as landing nowhere.
+ *
+ * The chosen role is recorded before navigating (see lib/role-preference.ts).
+ * These screens sit outside the app shell's React tree, so they cannot call
+ * `setRole` directly; the shell reads the choice back when it mounts.
+ *
+ * Validation is client-side only. The submit handler is the single place to
+ * swap in the real sign-in mutation once one exists — the field state, error
+ * rendering and pending UI all stay as they are.
  */
 export function LoginForm() {
   const router = useRouter()
+  const [audience, setAudience] = useState<'management' | 'member'>('management')
+  const [staffRole, setStaffRole] = useState<SignInRole>('owner')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [errors, setErrors] = useState<FieldErrors>({})
   const [pending, setPending] = useState(false)
 
+  const role: SignInRole = audience === 'member' ? 'member' : staffRole
+  const roleLabel =
+    audience === 'member'
+      ? 'Member'
+      : (MANAGEMENT_ROLES.find((r) => r.id === staffRole)?.label ?? 'Owner')
+
   function validate(): FieldErrors {
     const next: FieldErrors = {}
     if (!email.trim()) {
-      next.email = 'Enter your work email.'
+      next.email = audience === 'member' ? 'Enter your email.' : 'Enter your work email.'
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       next.email = 'That email address looks incomplete.'
     }
@@ -51,14 +76,84 @@ export function LoginForm() {
     setPending(true)
     // Placeholder for the real mutation; keeps the pending state observable.
     await new Promise((resolve) => setTimeout(resolve, 600))
-    router.push('/dashboard')
+    // Record the role BEFORE navigating: the app shell reads it as it mounts,
+    // so writing it after the push would be one frame too late.
+    rememberRole(role)
+    router.push(ROLE_LANDING[role])
   }
 
   return (
     <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-5">
+      {/* Which door: staff workspace, or a member's own account. */}
+      <div
+        role="radiogroup"
+        aria-label="Who is signing in"
+        className="grid grid-cols-2 gap-1 rounded-full bg-secondary p-1"
+      >
+        {(
+          [
+            ['management', 'Management'],
+            ['member', 'Member'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="radio"
+            aria-checked={audience === id}
+            onClick={() => setAudience(id)}
+            className={cn(
+              'rounded-full px-4 py-2 text-sm font-medium transition-colors',
+              audience === id
+                ? 'bg-card text-foreground shadow-[0_1px_3px_rgb(20_22_26_/_0.12)]'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {label} sign in
+          </button>
+        ))}
+      </div>
+
+      {audience === 'management' ? (
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-2 text-sm font-medium">Sign in as</legend>
+          <div className="flex flex-col gap-2">
+            {MANAGEMENT_ROLES.map((option) => (
+              <label
+                key={option.id}
+                className={cn(
+                  'flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors',
+                  staffRole === option.id
+                    ? 'border-brand bg-brand-soft'
+                    : 'border-border bg-card hover:border-brand/40',
+                )}
+              >
+                <input
+                  type="radio"
+                  name="staff-role"
+                  value={option.id}
+                  checked={staffRole === option.id}
+                  onChange={() => setStaffRole(option.id)}
+                  className="mt-0.5 size-4 accent-[var(--brand)]"
+                />
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-sm font-medium leading-none">{option.label}</span>
+                  <span className="text-xs text-muted-foreground">{option.blurb}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      ) : (
+        <p className="rounded-xl border border-border bg-card p-3 text-xs leading-relaxed text-muted-foreground">
+          Members sign in to their own portal — bookings, plan and visit history.
+          Staff should use <strong className="font-medium text-foreground">Management sign in</strong>.
+        </p>
+      )}
+
       <div className="flex flex-col gap-2">
         <Label htmlFor="email" className="text-sm">
-          Work email
+          {audience === 'member' ? 'Email' : 'Work email'}
         </Label>
         <Input
           id="email"
@@ -142,7 +237,7 @@ export function LoginForm() {
             Signing in
           </>
         ) : (
-          'Sign in'
+            `Sign in as ${roleLabel}`
         )}
       </Button>
 

@@ -46,9 +46,11 @@ function DashboardScreen() {
             <span aria-hidden>·</span>
             <span className="tnum">{compactMoney(mrr)}/mo recurring</span>
             <span aria-hidden>·</span>
-            <span className="tnum">
+            {/* The queue now lives at the foot of a long page, so its count
+                doubles as the jump link to it. */}
+            <a href="#needs-attention" className="tnum underline-offset-2 hover:underline">
               {num(criticalCount)} to act on · {compactMoney(valueAtStake)}/mo at stake
-            </span>
+            </a>
           </>
         }
         actions={
@@ -68,8 +70,6 @@ function DashboardScreen() {
       />
 
       <PageBody>
-        <AttentionQueue />
-
         <KpiStrip />
 
         <RevenueChart />
@@ -80,6 +80,16 @@ function DashboardScreen() {
           <AttendanceHeatmap />
           <CohortTriangle />
         </div>
+
+        {/*
+          The ranked work queue sits at the foot of the page by request. It used
+          to open the screen, which put a full screenful of tasks between the
+          owner and any number at all. The page header still carries its count
+          and links down to it, so moving it does not hide that work is waiting.
+        */}
+        <section id="needs-attention" className="scroll-mt-6">
+          <AttentionQueue />
+        </section>
       </PageBody>
     </RequireScreen>
   )

@@ -8,6 +8,7 @@ import { Button } from '@/components/v2/ui/button'
 import { Checkbox } from '@/components/v2/ui/checkbox'
 import { Input } from '@/components/v2/ui/input'
 import { Label } from '@/components/v2/ui/label'
+import { ROLE_LANDING, rememberRole } from '@/lib/role-preference'
 import { cn } from '@/lib/v2/utils'
 
 interface FieldErrors {
@@ -75,7 +76,12 @@ export function SignupForm() {
 
     setPending(true)
     await new Promise((resolve) => setTimeout(resolve, 600))
-    router.push('/dashboard')
+    // Signing up creates the gym's account, so the new session is the owner.
+    // Setting it explicitly also clears any role left over from a previous
+    // sign-in on this browser — otherwise a member who signs up would be sent
+    // to the owner dashboard while the shell still thought they were a member.
+    rememberRole('owner')
+    router.push(ROLE_LANDING.owner)
   }
 
   return (

@@ -120,7 +120,7 @@ export const TESTIMONIALS: Testimonial[] = [
 export const PLANS: Plan[] = [
   {
     name: 'Studio',
-    price: '$79',
+    price: '₹5,999',
     cadence: '/month',
     description: 'For a single location finding its feet.',
     features: [
@@ -132,7 +132,7 @@ export const PLANS: Plan[] = [
   },
   {
     name: 'Growth',
-    price: '$149',
+    price: '₹11,999',
     cadence: '/month',
     description: 'For busy gyms with a full timetable.',
     features: [

@@ -100,8 +100,14 @@ export function RequireScreen({
   screen: ScreenKey
   children: React.ReactNode
 }) {
-  const { can, roleMeta } = useApp()
+  const { can, roleMeta, roleResolved } = useApp()
   if (can(screen)) return <>{children}</>
+
+  // The signed-in role is read back from storage on mount, so for the first
+  // frame every session looks like the default owner. Showing the no-access
+  // panel then would flash it at exactly the people who DO have access — a
+  // trainer arriving on /my-schedule straight from sign-in. Wait one frame.
+  if (!roleResolved) return null
 
   return (
     <div className="flex min-h-[60vh] items-center justify-center p-6">

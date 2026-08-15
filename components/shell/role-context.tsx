@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { readRememberedRole, rememberRole } from '@/lib/role-preference'
 
 /**
  * Role + location state for the whole app. The role reshapes navigation,
@@ -122,6 +123,14 @@ interface AppState {
   role: Role
   roleMeta: RoleMeta
   setRole: (role: Role) => void
+  /**
+   * False for the first frame after mount, while the signed-in role is read
+   * back from storage. `RequireScreen` waits on this: without it, a trainer
+   * landing on /my-schedule renders one frame as the default owner — who has
+   * no such permission — and flashes the "not part of your role" panel before
+   * correcting itself.
+   */
+  roleResolved: boolean
   location: LocationMeta
   setLocation: (id: string) => void
   can: (screen: ScreenKey) => boolean
@@ -145,9 +154,34 @@ export function AppProvider({
   children: React.ReactNode
   initialRole?: Role
 }) {
-  const [role, setRole] = React.useState<Role>(initialRole)
+  const [role, setRoleState] = React.useState<Role>(initialRole)
+  const [roleResolved, setRoleResolved] = React.useState(false)
   const [locationId, setLocationId] = React.useState('all')
   const [commandOpen, setCommandOpen] = React.useState(false)
+
+  /**
+   * Adopt whichever role signed in.
+   *
+   * `useLayoutEffect` rather than `useEffect` so this runs before the browser
+   * paints — the role is settled in the same frame the shell first appears,
+   * instead of the screen showing the default role and then swapping.
+   *
+   * Reading storage in a `useState` initializer would be simpler and is wrong
+   * here: this app is a static export, so the prerendered HTML is built with
+   * the default role, and a client-side initial render that disagreed with it
+   * is a hydration mismatch.
+   */
+  React.useLayoutEffect(() => {
+    const remembered = readRememberedRole()
+    if (remembered) setRoleState(remembered)
+    setRoleResolved(true)
+  }, [])
+
+  /** Switching role in the app persists too, so a reload stays where you were. */
+  const setRole = React.useCallback((next: Role) => {
+    setRoleState(next)
+    rememberRole(next)
+  }, [])
 
   const value = React.useMemo<AppState>(() => {
     const roleMeta = ROLES.find((r) => r.id === role) ?? ROLES[0]
@@ -156,6 +190,7 @@ export function AppProvider({
       role,
       roleMeta,
       setRole,
+      roleResolved,
       location,
       setLocation: setLocationId,
       can: (screen) => PERMISSIONS[role].includes(screen),
@@ -163,7 +198,7 @@ export function AppProvider({
       commandOpen,
       setCommandOpen,
     }
-  }, [role, locationId, commandOpen])
+  }, [role, roleResolved, setRole, locationId, commandOpen])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
