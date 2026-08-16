@@ -29,3 +29,6 @@ tsconfig.tsbuildinfo
 # account id and the account's login email, which the repository has no reason
 # to carry. README.md is the published account of the project.
 HISTORY.md
+# The merged design archive: 15 MB of code that is now in app/ and components/.
+# Recoverable with: git show 066a290:flex-fit-gym-management-hey.zip > baseline.zip
+flex-fit-gym-management-hey.zip

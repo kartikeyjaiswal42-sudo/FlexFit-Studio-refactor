@@ -1,38 +1,61 @@
 # FlexFit Studio
 
-Gym-operations software: members and profiles, retention and cohorts, class
-schedule, check-in and kiosk, leads pipeline, trainers, **equipment (asset
-register, maintenance, fault log and member reservations)**, corporate credit
-pools, billing and dunning, a payments ledger, notifications, 12 reports, a
-member portal, settings, a ⌘K command palette and a role switcher.
-
-Actions write to the database for real: freezing a member, taking a payment,
-activating a trainer, saving a setting, reporting a fault and reserving
-equipment all persist and survive a reload. **Outbound email really sends**, via
-Resend — see *Email* below.
+**Gym-operations software, and a record of putting a database underneath a 23-screen app that
+never had one — without changing what any of those screens said.**
 
 **Live:** https://flexfit-studio.amitynoidalibrary.workers.dev
 
+> **Evaluating this project?** → **[JUDGES.md](JUDGES.md)** is a fifteen-minute path through it,
+> ending at the bug that a kiosk check-in triggered and nothing reported.
+
+Members and profiles, retention and cohorts, the class schedule, check-in and a kiosk, a leads
+pipeline, trainers, equipment (asset register, maintenance, fault log, member reservations),
+corporate credit pools, billing and dunning, a payments ledger, notifications, twelve reports, a
+member portal, settings, a ⌘K command palette.
+
+**Actions write to the database.** Freezing a member, taking a payment, changing a plan, adding a
+note, activating a trainer, saving a setting, reporting a fault, reserving equipment, clearing a
+work queue and emailing from the retention queue all persist and survive a reload. Outbound email
+really sends, through Resend — see *Email* below.
+
+**There is no authentication.** Any credentials open any door, and the sign-in screen says so.
+See [docs/07-limits.md](docs/07-limits.md).
+
+## The interesting part
+
+The app was inherited with **no backend of any kind** — no route handlers, no server actions, no
+database. Every screen computed its numbers at module load from seeded constants. Buttons fired a
+`toast()` and changed nothing.
+
+It was not a mockup with placeholder values, though. It was a coherent simulated gym: 380 members,
+37,410 check-ins, a ledger where gross, refunds and net reconcile. **Nobody had written down the
+rules it obeyed** — payments append-only, invoices derived rather than stored, `consumesCredit:
+null` meaning unlimited while `0` is a real value, a fixed clock the whole dataset hangs off. Those
+had to be read out of the code before a single table could be designed, and then survive being
+moved into SQLite.
+
+[docs/01-inherited.md](docs/01-inherited.md) lists the rules and what each one costs to get wrong.
+[docs/02-protecting-behaviour.md](docs/02-protecting-behaviour.md) is how they were kept.
+[docs/03-failures.md](docs/03-failures.md) is what got through anyway.
+
 ## Shape of the thing
 
-One Cloudflare Worker serves both halves, and the split between them is the
-main design decision in the repository:
+One Cloudflare Worker serves both halves, and the split is the main design decision here:
 
 | | |
 | --- | --- |
-| **UI** | Next.js 16 + React 19 + Tailwind v4, built with `output: 'export'` to 481 static HTML pages |
-| **API** | tRPC 11 on a Worker (`worker/index.ts`), mounted at `/api/trpc` |
-| **Data** | Cloudflare D1 (SQLite) through Drizzle ORM |
+| **UI** | Next.js 16 + React 19 + Tailwind v4, built with `output: 'export'` to static HTML — one page per screen and per record (516 in the last build) |
+| **API** | tRPC 11 on a Worker (`worker/index.ts`), mounted at `/api/trpc`, 47 procedures across 8 routers |
+| **Data** | Cloudflare D1 (SQLite) through Drizzle ORM, 5 migrations |
 
-Static assets are matched **before** the Worker runs, so a page load costs no
-Worker CPU. That is not a micro-optimisation — an SSR deploy of the same app
-returned 503 under Next's link prefetching, because App Router prefetches every
-visible link and each one became a server render. Exporting the pages made
-24 out of 24 concurrent requests succeed where the SSR build managed 18 of 28.
+Static assets are matched **before** the Worker runs, so a page load costs no Worker CPU. That is
+not a micro-optimisation — an SSR deploy of the same app returned 503 on 1 request in 12 under
+concurrency, because the App Router prefetches every visible link and each prefetch became a server
+render. Exporting the pages took concurrent success from 18-of-28 to 24-of-24. The measurement is
+in [docs/02-protecting-behaviour.md](docs/02-protecting-behaviour.md).
 
-`AppRouter` crosses into the browser as a **type only**, so renaming a procedure
-breaks the build rather than production, and no server code, Drizzle or D1
-driver reaches the client bundle.
+`AppRouter` crosses into the browser as a **type only**, so renaming a procedure breaks the build
+rather than production, and no server code, Drizzle or D1 driver reaches the client bundle.
 
 ## Running it
 
@@ -40,179 +63,137 @@ Node 20+ and pnpm.
 
 ```bash
 pnpm install
-pnpm dev              # http://localhost:3000 — UI against the seeded fixtures
+pnpm dev              # http://localhost:3000 — UI against the built-in seed
 ```
 
-Against a real local database:
+`pnpm dev` alone cannot reach `/api/trpc`, so the app runs off the seed, **says so in a banner**,
+and write buttons refuse rather than pretending. To exercise anything that saves, run it against a
+real local database:
 
 ```bash
 pnpm db:local             # migrations: core tables
-pnpm db:local:equipment   # migrations: equipment tables
-pnpm seed:local           # load server/db/seed.sql
-pnpm equipment:local      # load server/db/seed-equipment.sql
+pnpm db:local:equipment   # migrations: equipment
+pnpm seed:local           # the seed — generated by running the original data generators
+pnpm equipment:local
+pnpm db:local:notes && pnpm notes:local
 pnpm attendance:local     # reconcile daily totals with the check-in rows
+pnpm db:local:ltv         # lifetime-value base column
 pnpm preview              # next build && wrangler dev — the Worker, as Cloudflare runs it
 ```
 
-`pnpm dev` alone cannot reach `/api/trpc`, so the app runs off the built-in seed
-and says so in a banner; write buttons refuse rather than pretending. Use
-`pnpm preview` to exercise anything that saves.
+**That order is load-bearing**, not stylistic: the seed deliberately does not carry the
+lifetime-value column, so `db:local:ltv` runs after it. [docs/03-failures.md](docs/03-failures.md)
+§1 explains why.
 
 ## Checking it
 
 ```bash
 pnpm verify:numbers   # 85 checks — does the same fact have the same value everywhere?
-pnpm test:api         # 54 checks — MUTATES, point it at a local D1 you can reseed
 pnpm smoke            # 14 read-only checks, safe against production
-pnpm test:ui          # 38 checks in a real browser (Playwright)
+pnpm test:live        # 29 read-only browser checks, safe against production
+pnpm test:api         # 61 checks — MUTATES, local D1 only
+pnpm test:buttons     # 31 checks — MUTATES, real browser, reads D1 either side of each click
+pnpm test:fixes       # 53 checks — MUTATES, real browser
+pnpm test:ui          # 38 checks — writes one payment row
+pnpm test:new-member  # 12 checks — creates a member and takes a payment; refuses an https base
 ```
 
-`verify:numbers` is the unusual one: every assertion re-derives the value a
-second time from the raw entities by a different route and demands the two
-match. It exists because a dashboard KPI, a report row and a detail page can
-each be individually correct and still disagree — which is exactly what it found
-on its first run (a "Visits · 30 days" tile reading 4,721 above a heatmap built
-from 2,703 rows).
+Two of these are unusual enough to be worth a sentence each.
 
-`test:ui` writes one payment row per run and does not remove it, so like
-`test:api` it belongs against a local database.
+**`verify:numbers`** re-derives every assertion a second time from the raw entities by a different
+route, and demands the two agree — because a check that calls the app's own function and compares
+the result to itself passes no matter what the function does. It found a dashboard tile reading
+**4,721** directly above a heatmap built from **2,703** rows.
+
+**`test:buttons`** never treats a toast as evidence. It reads D1, presses the real control in a
+real browser, reads D1 again, and compares — and it aborts every `/api/trpc` request to assert the
+app refuses rather than showing green over nothing.
+
+Everything that mutates belongs against a local database you can reseed. Full table, and why a
+mutating suite is the only honest way to test an append-only ledger, in
+[docs/04-testing.md](docs/04-testing.md).
 
 ## Email
 
-Sending is off until a key is bound, and the UI states that plainly rather than
-failing silently:
+Sending is off until a key is bound, and the UI states that plainly rather than failing silently:
 
 ```bash
-npx wrangler secret put RESEND_API_KEY   # from resend.com/api-keys — free tier, no card
+npx wrangler secret put RESEND_API_KEY   # resend.com/api-keys — free tier, no card
 npx wrangler secret put EMAIL_FROM       # "FlexFit Studio <hello@yourdomain.com>"
 ```
 
-`EMAIL_FROM` must be on a domain verified in Resend. Until one is, Resend's
-shared sender delivers only to the account owner — enough to prove the pipeline,
-which is what **Settings → Email → Send a test** is for. A key can be valid while
-the sender domain is not, and that only fails at send time, so a test send is the
-only honest check.
+`EMAIL_FROM` must be on a domain verified in Resend. Until one is, Resend's shared sender delivers
+only to the account owner — enough to prove the pipeline, which is what **Settings → Email → Send a
+test** is for. A key can be valid while the sender domain is not, and that only fails at send time,
+so a test send is the only honest check.
+
+The key is a **Worker secret, never a form field**: a key typed into this app could only be stored
+in the database it serves to every browser.
 
 ## Deploying
 
-**Pushing to `main` deploys.** `.github/workflows/deploy.yml` builds the site,
-ships the Worker, waits out the rollout window and then runs the 54-check API
-suite against the live URL — so a merged backend change is visible on the
-deployed site without anyone running wrangler, and "the deploy went green" means
-the API actually answered rather than that the upload succeeded.
+**Pushing to `main` deploys.** `.github/workflows/deploy.yml` builds the site, ships the Worker,
+waits out the rollout window, then runs the read-only smoke suite against the live URL — so "the
+deploy went green" means the API actually answered, not that the upload succeeded.
 
-**A schema change must reach D1 before the code that needs it**, or every
-request 500s on a missing table for the whole rollout:
+**A schema change must reach D1 before the code that needs it**, or every request 500s on a missing
+column for the whole rollout — and it presents as a broken deploy rather than a missing migration.
+The workflow therefore **blocks** any push touching `server/db/migrations/`. Apply it first:
 
 ```bash
 pnpm db:remote:equipment && pnpm equipment:remote && pnpm attendance:remote
-pnpm deploy
+pnpm db:remote:notes && pnpm notes:remote && pnpm db:remote:ltv
 ```
 
-The workflow deliberately blocks any push touching `server/db/migrations/` for
-that reason; re-run it from the Actions tab with *"Schema change already
-applied"* ticked once the migration is in.
+then re-run the workflow from the Actions tab with *"Schema change already applied"* ticked.
 
-It needs two repository secrets (Settings → Secrets and variables → Actions):
+Two repository secrets are needed (Settings → Secrets and variables → Actions):
 
 | Secret | What |
 | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | a token created from the **Edit Cloudflare Workers** template |
+| `CLOUDFLARE_API_TOKEN` | a token from the **Edit Cloudflare Workers** template |
 | `CLOUDFLARE_ACCOUNT_ID` | the account the Worker lives in |
 
-**A schema change is the one thing the pipeline will not do for you.** Deploying
-code before its migration reaches the database means every request 500s on a
-missing column for the whole rollout, and it presents as a broken deploy rather
-than a missing migration. So a push that touches `server/db/migrations/` is
-stopped by a guard step. Apply it first, then re-run the workflow from the
-Actions tab with *"Schema change already applied"* ticked:
+Paste them without a trailing newline. GitHub stores a secret exactly as pasted, and a newline
+inside the account id makes curl exit 3 while wrangler reports a generic auth error — which frames
+it as a token problem and cost three runs to find. Both workflow steps strip whitespace and warn
+when it mattered.
 
-```bash
-pnpm db:remote        # apply migrations to the remote D1
-pnpm seed:remote      # only when seeding a fresh database
-```
-
-Deploying by hand, if you need to:
-
-```bash
-pnpm deploy           # next build && wrangler deploy
-```
+Deploying by hand: `pnpm deploy`.
 
 ## Layout
 
 ```
-app/               24 routes — (app)/ is the shell-wrapped back office, kiosk/ stands alone
-components/        80 components in 20 feature folders, plus components/ui primitives
-lib/data/          seeded fixtures the screens currently render from
+app/               36 routes — (app)/ is the shell-wrapped back office, kiosk/ stands alone
+components/        134 components across 22 folders, plus components/ui primitives
+lib/data/          the seed generators, and the live bindings the API hydrates over
+lib/store/         the client store: re-reads the whole dataset after every write
 lib/               formatting, risk scoring, shared types, the typed API client
-server/trpc/       routers: read, ops, booking, crm, billing
+server/trpc/       8 routers: read, ops, booking, crm, billing, comms, queue, equipment
 server/domain/     booking rules, ledger rules, metrics, mappers
-server/db/         Drizzle schema, migrations, seed
+server/db/         Drizzle schema, 5 migrations, seed
 worker/index.ts    the Worker: tRPC in front, static assets behind
-scripts/           seed pipeline and the API test suite
+scripts/           seed pipeline and 11 test suites
+docs/              the written record — start at docs/README.md
 ```
 
-## Decisions worth knowing before changing anything
+## Documentation
 
-**Payments are append-only.** A refund adds a row; it never edits one. Reversals
-carry `reversalOf`, and gross, refunds and net all reconcile by replaying the
-ledger. Editing a payment in place would make history unreproducible.
-
-**There is no `invoices` table.** An invoice is a derivation over `payments`.
-Dunning, pool health and reports are derivations too, which is why
-`read.bootstrap` returns whole entities rather than pre-chewed answers.
-
-**Three fields are absent because they are derived, not stored:** a member's
-risk (stale the moment someone checks in), a lead's age in days (wrong by the
-next morning), and a company's employee list (`members.company_id` already
-says it).
-
-**Class rosters are rows, not a JSON array.** A JSON array cannot express
-"insert only if the class is under capacity" atomically; the composite primary
-key on `class_seats` makes double-booking impossible at the storage layer.
-
-**The attendance heatmap is materialised** — 168 rows rather than a `GROUP BY`
-over 37,410 check-ins, because D1 bills rows *scanned* and the aggregate would
-spend the free daily read budget in roughly a hundred page loads. It follows
-that any write path touching check-ins must keep the two in step: a kiosk
-double-tap is deduplicated by a deterministic id, and the aggregate is bumped
-**only when a row was really inserted**. `scripts/test-api.mjs` compares the
-heatmap total against `COUNT(*)` on every run, because that drift is otherwise
-invisible.
-
-**Unlimited plans store `consumesCredit: null`.** Test it with
-`typeof === 'number'`, never for truthiness — `0` is a real value, and
-truthiness would let a member with no credits book forever.
-
-**The clock is `NOW` from `lib/seed.ts`, never `new Date()`.** The dataset is
-positioned relative to a fixed instant; using the wall clock makes the seeded
-world drift out from under the tests.
-
-## Tests
-
-```bash
-BASE=https://flexfit-studio...workers.dev pnpm smoke      # 14 read-only checks
-BASE=http://127.0.0.1:8789            pnpm test:api       # 54 checks — MUTATES
-```
-
-**`test:api` writes.** It issues real refunds and records real check-ins, which
-is the only honest way to test an append-only ledger, but it means a given
-database survives roughly one run: the second finds the payment already refunded
-and fails five checks while nothing is actually wrong. **Point it at a local D1
-you can reseed, never at production.**
-
-`smoke` is the one that is safe to run anywhere, any number of times, and it is
-what the deploy workflow runs against the live site. It is not a ping — besides
-checking the site and API answer, it re-asserts the invariant most likely to
-break silently: the materialised heatmap must still agree with the check-in
-table it summarises. Nothing errors when those drift apart; the numbers just
-stop matching.
-
-Pace probes against production — a route that only passes when probed alone is
-not passing.
+| | |
+| --- | --- |
+| **[JUDGES.md](JUDGES.md)** | **fifteen minutes, start here** |
+| [docs/01-inherited.md](docs/01-inherited.md) | what we started with, and the rules nobody wrote down |
+| [docs/02-protecting-behaviour.md](docs/02-protecting-behaviour.md) | how the restructure was made provably invisible |
+| [docs/03-failures.md](docs/03-failures.md) | five defects that reached working code; four produced no error |
+| [docs/04-testing.md](docs/04-testing.md) | what runs, and where it is safe to run it |
+| [docs/05-decisions.md](docs/05-decisions.md) | decisions we would be asked to defend |
+| [docs/06-ai-usage.md](docs/06-ai-usage.md) | where AI was used, and where it was confidently wrong |
+| [docs/07-limits.md](docs/07-limits.md) | what this does not do |
+| [docs/00-inherited-batches.md](docs/00-inherited-batches.md) | the merged tree, file by file, as delivered |
 
 ## Status
 
-The API is live and covered. The screens still render the client-side fixtures
-in `lib/data/`, so **actions in the UI do not yet persist**; the wiring plan
-lives with the project notes.
+The API is live, the UI is wired to it, and the suites above cover both. The gaps are named in
+[docs/07-limits.md](docs/07-limits.md) rather than left to be discovered: no authentication, no SMS
+or push provider, no `/equipment/[id]` detail route, and one row of production data that a mutating
+test suite damaged and that has deliberately not been repaired.
