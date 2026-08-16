@@ -1,5 +1,15 @@
 # FlexFit Studio — merged tree (Batches 1 → 9)
 
+> **This document is a historical record: the tree exactly as it was delivered, before any of
+> the work in [01-inherited.md](01-inherited.md) onwards.** It is published because it is the
+> baseline the restructure is measured against.
+>
+> Read it as a snapshot, not as a description of the current app. In particular, the *"Known
+> gaps for final wiring"* section at the end lists the state at hand-off — **nothing persisted
+> across a reload, because there was no backend.** That is no longer true: actions write to D1
+> and survive a reload. What happened in between is
+> [02-protecting-behaviour.md](02-protecting-behaviour.md).
+
 Single Next.js 16 / Tailwind v4 / TypeScript app. Batches 1–7 are the tree you
 uploaded, unchanged. Batches 8 and 9 are new files added on top, plus exactly one
 wiring edit (noted below).
